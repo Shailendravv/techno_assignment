@@ -38,10 +38,32 @@ Precision was chosen over recall deliberately, because the brief punishes a
 confident wrong citation more than it punishes a miss. This is the cost of
 that choice, not an oversight.
 
+## No semantic answer cache, deliberately
+
+Embedding the question and serving a cached answer when a previous question
+lands within some cosine threshold would be actively dangerous *on this
+corpus*, and dangerous in exactly the way the rest of the system is built to
+prevent.
+
+"checkout-api is running hot on CPU" and "payments-api is running hot on CPU"
+differ by one token, are answered by different documents, and embed closer
+together than many genuine paraphrases — the overlapping distributions in
+[Hybrid Retrieval](evaluation/hybrid-retrieval.md) are the same measurement.
+
+A retrieval mistake is caught downstream by the metadata filter, the relevance
+grader and the grounding model. **A cache hit bypasses all three.** It would
+reintroduce the precise failure the brief warns about, in the one place none of
+the defences can see it.
+
+If it were needed, the safe key would be the extracted `QuerySpec` — same
+service, same failure mode, same intent — which is exact matching on the
+fields the filter already uses, not similarity on prose.
+
 ## Two tuned constants
 
-`lexical_floor` and `coverage_floor` are fitted to this corpus and swept
-against these questions. See [Gate Calibration](evaluation/gate-calibration.md)
+`coverage_floor` (0.60) and `cosine_floor` (0.75) are fitted to this corpus and
+swept against these questions. Twenty questions over twelve documents is a small
+sample, and these numbers should be treated as provisional. See [Gate Calibration](evaluation/gate-calibration.md)
 for the sweep and the reasoning, but treat both as starting points rather
 than universal constants — a different corpus size or a different question
 style would need its own sweep.
@@ -63,3 +85,22 @@ first, finalise them, and only then write retrieval code — and write the
 held-out questions before looking at any scores. See
 [Development History](development-history.md) for how that ordering shows
 up in the commits.
+
+## What has never been executed
+
+Three things are built and unit-tested but have never run against the real
+service, for want of credentials — and a skipped test is not a passing one:
+
+1. **The SQL migrations have not been run.** They need Postgres with pgvector.
+   Covered instead by tests asserting the filter clauses textually, aimed at
+   deletion of the `service is null` disjunct — which would silently break
+   every question a general policy document answers.
+2. **The `FileStore`/`SupabaseStore` equivalence test is skipped**, not passing.
+   It is the real check that the migration is behaviour-preserving.
+3. **The Cloudinary upload has not round-tripped.** The signature algorithm is
+   pinned against a hand-computed SHA-1 vector, because Cloudinary answers a
+   wrong signature with a bare 401 and no diagnosis.
+
+The end-to-end four-outcome scores are likewise not published, because running
+the harness needs a `GROQ_API_KEY`. The retrieval-stage measurements are
+reproducible offline today.

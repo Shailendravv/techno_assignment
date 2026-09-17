@@ -111,10 +111,79 @@ HTTP surface, and (next phase) harness all call the same function.
   `GROQ_API_KEY`. Retrieval, filtering, gating, scoring, and the full test
   suite all run without one.
 
+## Phase 5 - dense retrieval, RRF fusion, and the corrective loop
+
+**`9a5746b`** - 160 tests passing, all offline
+
+- A config profile layer (`config/local.json`, `config/dev.json`) resolving
+  **environment variable > profile > code default**, so local and deployed can
+  use genuinely different components without a branch in the code.
+- `agent/embed.py` - one `Embedder` interface over `fastembed`/bge-small
+  (offline, deterministic, for the harness) and `gemini-embedding-001` (for the
+  deployed function). Vectors are disk-cached and keyed by an embedder
+  signature, so two vector spaces cannot be mixed.
+- Parent-document retrieval: embed `##` sections, cite the parent `doc_id`, so
+  the brief's contract is untouched.
+- `rrf_fuse()` combines the two arms by **rank**, not score - a BM25 score and
+  a cosine similarity have no principled conversion between them.
+- The CRAG relevance grader and the bounded rewrite cycle, wired as conditional
+  edges. This is where LangGraph stops being ceremony.
+- **Measured:** retrieval recall 93% to 100%, with the arms differing on
+  exactly one question. See [Hybrid Retrieval](evaluation/hybrid-retrieval.md).
+- **A planned idea the measurement killed:** the absolute cosine floor does not
+  separate answerable from unanswerable questions on this corpus. Reported
+  rather than quietly kept.
+
+## Phase 6 - Supabase, and one-query hybrid search
+
+**`8862b15`** - 185 tests passing
+
+- `supabase/migrations/` - `documents` and `chunks`, a weighted `tsvector` with
+  a GIN index, HNSW on `vector_cosine_ops`, and `hybrid_search()`: dense
+  similarity, `ts_rank_cd`, RRF and the metadata filter in a **single
+  statement**.
+- `agent/store/` - a `Store` protocol with `FileStore` and `SupabaseStore`. The
+  protocol is drawn so the **store ranks** while **Python filters and gates**,
+  keeping the metadata rule in one place with one test suite.
+- The SQL pre-filters as an optimisation; Python re-applies the filter and
+  stays authoritative, and `SupabaseStore` reports any divergence rather than
+  letting the SQL quietly win.
+
+## Phase 7 - Cloudinary and the ingestion pipeline
+
+**`6447ebb`** - 209 tests passing
+
+- Uploads go **browser to Cloudinary directly**, via a server-issued signature.
+  Vercel caps request bodies at 4.5 MB.
+- `ingest/pipeline.py` - fetch, parse, chunk, embed, upsert. Idempotent on a
+  content hash over metadata *and* body. Never runs inside a request handler.
+- The Cloudinary signature algorithm is pinned against a hand-computed SHA-1
+  vector, because a wrong signature returns a bare 401 with no diagnosis.
+
+## Phase 8 - deploy surface, caching, tracing, and the write-up
+
+**`fd160ca`** - 261 tests passing
+
+- `WRITEUP.md`, the requested deliverable.
+- The single-page UI, where `no_match` renders as an answer rather than an
+  error state.
+- An exact-answer cache - and a written refusal to build a semantic one, for
+  reasons in [Known Limitations](limitations.md).
+- Langfuse tracing over HTTP, off unless configured.
+- A weekly keep-alive workflow, because a Supabase free project pauses after
+  seven idle days.
+
 ---
 
-Scaffolding for later phases — dense retrieval (`ingest/`), a Postgres-backed
-store (`supabase/`), and a web front end (`web/`) — exists in the repository
-but had not yet been committed as of this documentation's writing. Treat
-anything not listed above as **not yet implemented**, not as a completed
-phase.
+## What remains unverified
+
+Three things are built and unit-tested but have **never executed against the
+real service**, for want of credentials - and a skipped test is not a passing
+one:
+
+1. The SQL migrations have not been run against Postgres with pgvector.
+2. The `FileStore`/`SupabaseStore` equivalence test is skipped.
+3. The Cloudinary upload has not round-tripped.
+
+The end-to-end four-outcome scores are likewise not published, because running
+the harness needs a `GROQ_API_KEY`. See `WRITEUP.md` sections 3 and 7.

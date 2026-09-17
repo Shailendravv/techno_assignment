@@ -60,7 +60,7 @@ curl -X POST localhost:8000/ask -H 'content-type: application/json' \
 gate, and the entire test suite run offline:
 
 ```bash
-pytest -q                       # 112 tests, no network, no key
+pytest -q                       # 261 tests, no network, no key
 python -m eval.harness --sweep  # gate calibration, retrieval only
 ```
 

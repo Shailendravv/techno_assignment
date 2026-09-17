@@ -96,17 +96,28 @@ agent/
   core/               PURE functions - no LangGraph, no network, no I/O
     corpus.py         parse runbooks/*.md front-matter into Doc records
     query.py          question -> QuerySpec (service, failure mode, intent, date)
-    retrieve.py       BM25 + metadata filter + gate      <- the important one
+    retrieve.py       BM25 + dense + RRF + metadata filter + gate  <- the important one
+    chunk.py          split on ## headings; cite the parent doc_id
     confidence.py     high | medium | low | no_match
   nodes/              thin adapters: unpack state, call a core fn, write back
+    ground.py         the grounding prompt, and citation verification
+    grade.py          the CRAG relevance grader and query rewriter
+  store/              Store protocol -> FileStore | SupabaseStore
+  embed.py            one Embedder interface: fastembed | Gemini | none
+  cache.py            exact-answer cache (and why there is no semantic one)
+  observability.py    Langfuse export, off unless configured
   llm.py              Groq client: 429 backoff, defensive JSON parsing
   config.py           every tuned constant and model ID
 
+config/               local.json, dev.json - committed, no secrets
 app/                  FastAPI surface (thin by design)
+web/                  single-page UI
+ingest/               offline pipeline: Cloudinary -> parse -> chunk -> embed
+supabase/migrations   single-query hybrid search, in SQL
 baseline/             the no-retrieval control arm
-eval/                 questions, harness, scorer
+eval/                 questions, harness, scorer, retrieval-only scorer
 runbooks/             RB-001.md .. RB-012.md
-tests/                112 tests, all offline
+tests/                261 tests, all offline
 ```
 
 `agent/core/` imports nothing heavy on purpose. That is what keeps the test
@@ -120,9 +131,18 @@ machine with no keys and no internet.
 | Generation | Groq `openai/gpt-oss-120b` | Production model, 8k TPM free — about two questions a minute |
 | Reasoning arm | Groq `qwen/qwen3.8-27b` | Selectable per request. Preview model, so its ID lives in [config](../reference/configuration.md) |
 | Grading | Groq `openai/gpt-oss-20b` | Cheapest and fastest |
-| Lexical | `rank_bm25` | Twelve documents; an in-memory index is the right size |
-| Orchestration | LangGraph | Earns its place at the conditional edge, not the happy path |
+| Lexical | `rank_bm25` locally, Postgres `ts_rank_cd` deployed | Same interface, two backends |
+| Embeddings (local) | `fastembed` / `bge-small-en-v1.5`, 384d ONNX | Deterministic, offline, un-rate-limited - so the harness is reproducible |
+| Embeddings (deployed) | `gemini-embedding-001` @ 768d | Real query/document asymmetry, and no 200MB of onnxruntime in the bundle |
+| Store | Supabase Postgres + pgvector | Dense, full-text and the metadata filter in **one SQL statement** |
+| Object store | Cloudinary (`resource_type: raw`) | Free accounts block PDF delivery by default; raw is not subject to that rule |
+| Hosting | Vercel Python runtime | 500MB bundle limit, generous max duration |
+| Orchestration | LangGraph | Earns its place at the conditional edges, not the happy path |
 
 Everything runs on free tiers. Groq has no embeddings endpoint, which is why
-dense retrieval — if it's added later — would take embeddings from a separate
-provider rather than Groq itself.
+embeddings come from Google instead.
+
+Supabase, Cloudinary and Langfuse are talked to over stdlib `urllib` rather
+than their SDKs: those packages drag in large dependency trees for what amounts
+to a few JSON POSTs, Vercel's bundler does no tree-shaking, and the bundle
+limit is real.

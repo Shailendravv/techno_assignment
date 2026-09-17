@@ -70,6 +70,8 @@ nav:
   - Evaluation:
       - The Scoring Model: evaluation/scoring.md
       - Gate Calibration: evaluation/gate-calibration.md
+      - Hybrid Retrieval: evaluation/hybrid-retrieval.md
+  - Deployment: deployment.md
   - Development History: development-history.md
   - Known Limitations: limitations.md
   - Reference:
