@@ -1,0 +1,5 @@
+# Documentation site only. Never ships to Vercel, never imported by app code.
+# Build: mkdocs build   Serve locally: mkdocs serve
+mkdocs==1.6.1
+mkdocs-material==9.6.7
+pymdown-extensions==10.14.3

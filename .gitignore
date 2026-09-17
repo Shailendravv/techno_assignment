@@ -7,3 +7,12 @@ venv/
 .pytest_cache/
 *.npy
 .embeddings_cache/
+documents/
+.claude/
+CLAUDE.md
+.mcp.json
+# Added by code-review-graph
+.code-review-graph/
+
+# MkDocs build output
+site/
