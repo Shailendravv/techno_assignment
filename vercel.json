@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "excludeFiles": "{rag-production-case-study/**,tests/**,eval/**,ingest/**,baseline/**,web/**,supabase/**,.venv/**,**/*.md,**/__pycache__/**,**/*.npy}"
+    }
+  },
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
+}

@@ -1,0 +1,16 @@
+-r requirements.txt
+
+# Local only. None of these ship to Vercel.
+pytest==8.3.4
+pytest-asyncio==0.25.0
+uvicorn==0.34.0
+httpx==0.28.1
+
+# Offline embeddings for a deterministic, un-rate-limited eval harness.
+fastembed==0.5.1
+
+# Ingestion pipeline (Phase 7), run locally or in GitHub Actions - never in a
+# request handler.
+pymupdf4llm==0.0.17
+cloudinary==1.42.0
+supabase==2.11.0

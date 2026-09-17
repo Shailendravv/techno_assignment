@@ -1,0 +1,16 @@
+# Runtime - deployed to Vercel's Python function.
+# Keep this list small: Vercel's Python bundler does no tree-shaking, and
+# LangChain is a documented cause of bundle-size failures. We take langgraph
+# and langchain-core only, and call Groq and Gemini through their own SDKs
+# rather than the langchain-* provider wrappers.
+fastapi==0.115.6
+pydantic==2.10.4
+groq==0.13.1
+langgraph==0.2.60
+langchain-core==0.3.28
+rank-bm25==0.2.2
+python-frontmatter==1.1.0
+
+# Phase 5+. google-genai is small; fastembed is NOT and is excluded from the
+# deployed bundle via vercel.json - it serves the offline harness only.
+google-genai==0.3.0
