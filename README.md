@@ -15,18 +15,76 @@ near-identical document about the wrong service, is the actual problem.
 
 ---
 
+## Repository layout
+
+```text
+backend/    the agent, the API, the evaluation harness - everything below
+frontend/   the React UI, deployed separately
+```
+
+`backend/` is a self-contained Python project: its own `requirements*.txt`,
+`pytest.ini`, `vercel.json`, `.env`, `runbooks/`, `config/`. All commands below
+run with `backend/` as the working directory. Root-level files
+([`.gitignore`](.gitignore), [`.mcp.json`](.mcp.json), `.github/`,
+`.code-review-graph/`) are tooling shared across both projects.
+
+---
+
 ## Quick start
 
 ```bash
+./start.sh
+```
+
+That is the whole thing. [`start.sh`](start.sh) checks prerequisites, creates
+and activates `backend/.venv` if it is missing, installs the requirements file
+the active profile needs, installs `frontend/node_modules` if it is missing or
+stale, then runs the API on `:8000` and the web app on `:5173` and prints a
+status table. Ctrl+C shuts both down in reverse order. It is idempotent - every
+step checks whether it has already been done, so only the first run is slow.
+
+On Windows, run it from **Git Bash**, which ships with Git for Windows.
+
+Each service writes to `logs/` (`backend.log`, `frontend.log`, and
+`startup.log`, which mirrors everything the script prints). If a service fails
+to come up, the script tails its log rather than making you go find it.
+
+**Secrets** are read in priority order: the environment, then
+`~/.runbook-agent/secrets.env` if you keep one outside the workspace, then
+`backend/.env`. If `GROQ_API_KEY` is in none of them and the terminal is
+interactive, it is prompted for - masked - and saved to `backend/.env`, so the
+next run is silent. `APP_ENV=dev` also asks for the Gemini and Supabase keys
+that profile needs.
+
+```bash
+GROQ_API_KEY=gsk_...  ./start.sh       # one run, no prompt
+APP_ENV=dev ./start.sh                 # the Supabase + Gemini profile
+BACKEND_PORT=8001 ./start.sh           # ports are overridable
+./start.sh --backend-only              # or --frontend-only, --install-only
+./start.sh --no-free-ports             # see below
+```
+
+A port already in use is **freed**, not treated as an error: the usual cause is
+a server left over from a previous run, and the script names the PID before it
+kills it. `--no-free-ports` turns that into a hard stop instead - worth using if
+you routinely run something else on 8000 or 5173.
+
+A free Groq key takes about a minute to get at
+[console.groq.com/keys](https://console.groq.com/keys). No card, no paid tier.
+
+The same setup by hand, if you would rather not run a script:
+
+```bash
+cd backend
+
 python -m venv .venv
 .venv/Scripts/activate          # Windows;  source .venv/bin/activate on macOS/Linux
 pip install -r requirements-dev.txt
 
 cp .env.example .env            # then add your GROQ_API_KEY
-```
 
-A free Groq key takes about a minute to get at
-[console.groq.com/keys](https://console.groq.com/keys). No card, no paid tier.
+cd ../frontend && npm install
+```
 
 ```bash
 # Ask a question
@@ -73,7 +131,7 @@ environment variable  >  config/<APP_ENV>.json  >  code default
 | `dev` | Supabase | `gemini-embedding-001` | the deployed function |
 
 The profiles are committed and contain **no secrets** — a test enforces that.
-Credentials come from the environment only; see [.env.example](.env.example).
+Credentials come from the environment only; see [backend/.env.example](backend/.env.example).
 
 ---
 
@@ -169,7 +227,9 @@ mechanisms each aimed at a different failure.
 
 ## Layout
 
-```
+All of the following lives under `backend/`.
+
+```text
 agent/
   api.py            answer_question()  <- the entry point
   graph.py          LangGraph StateGraph; the gate as a conditional edge
@@ -343,7 +403,12 @@ design against a known weakness than to discover it in review.
 
 ## Deployment
 
+`vercel.json` lives in `backend/`, so the Vercel project's **Root Directory**
+must be set to `backend` in the dashboard before the first deploy.
+
 ```bash
+cd backend
+
 # 1. Run the migrations, in order, in the Supabase SQL editor:
 #    supabase/migrations/0001_schema.sql
 #    supabase/migrations/0002_hybrid_search.sql
@@ -357,6 +422,9 @@ python -m ingest.pipeline --seed --profile dev
 vercel build && du -sh .vercel/output/functions/*.func
 vercel deploy --prod
 ```
+
+The React UI in `frontend/` deploys separately (its own Vercel project, or any
+static host) and talks to this API over `VITE_API_URL`.
 
 A Supabase free project **pauses after seven days of inactivity** and unpausing
 is a manual click. [`.github/workflows/keepalive.yml`](.github/workflows/keepalive.yml)

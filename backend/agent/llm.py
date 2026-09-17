@@ -20,6 +20,9 @@ import time
 from dataclasses import dataclass
 
 from agent.config import Settings, settings as default_settings
+from logger.zap import create_logger
+
+log = create_logger()
 
 
 class LLMUnavailable(RuntimeError):
@@ -118,7 +121,15 @@ def chat(
             last = exc
             if not _is_rate_limit(exc) or attempt == cfg.llm_max_retries - 1:
                 raise
-            time.sleep(_retry_after(exc, attempt))
+            wait_s = _retry_after(exc, attempt)
+            log.warning(
+                "rate_limited",
+                model=model,
+                role=role,
+                attempt=attempt + 1,
+                wait_s=wait_s,
+            )
+            time.sleep(wait_s)
 
     raise last  # type: ignore[misc]  # unreachable; loop either returns or raises
 

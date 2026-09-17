@@ -3,6 +3,7 @@
 # Local only. None of these ship to Vercel.
 pytest==8.3.4
 pytest-asyncio==0.25.0
+pytest-mock==3.14.0
 uvicorn==0.34.0
 httpx==0.28.1
 

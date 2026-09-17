@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings whatever the checkout platform does.
+# core.autocrlf=true is the Windows default, and a start.sh checked out with
+# CRLF fails on Linux and macOS with `bad interpreter: /usr/bin/env bash^M`.
+*.sh text eol=lf

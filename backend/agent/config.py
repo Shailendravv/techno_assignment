@@ -303,6 +303,19 @@ class Settings:
     llm_max_retries: int = field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
     llm_timeout_s: float = field(default_factory=lambda: _env_float("LLM_TIMEOUT_S", 45.0))
 
+    # Origins allowed to call the API from a browser. Comma-separated. Defaults
+    # cover the Vite dev server so `npm run dev` works against a local API with
+    # no extra setup; a deployed frontend origin goes in the environment.
+    cors_origins: str = field(
+        default_factory=lambda: _env(
+            "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        )
+    )
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
     @property
     def has_groq(self) -> bool:
         return bool(self.groq_api_key)

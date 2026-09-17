@@ -341,7 +341,10 @@ service**, because no credentials were available:
 
 ## 8. Running it
 
+All commands below run with `backend/` as the working directory.
+
 ```bash
+cd backend
 pip install -r requirements-dev.txt
 
 # The tests that matter most: filter and gate, no network, no model, no keys.

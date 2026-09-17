@@ -135,6 +135,10 @@ def ground(
         )
 
     answer = str(parsed.get("answer", "")).strip()
+    # Groq's smaller free-tier models sometimes over-escape newlines inside the
+    # JSON string (emitting `\\n` instead of `\n`), which json.loads then hands
+    # back as a literal two-character "\n" rather than a line break.
+    answer = answer.replace("\\n", "\n")
     raw_cited = parsed.get("cited_doc_ids") or []
     if isinstance(raw_cited, str):
         raw_cited = [raw_cited]

@@ -1,0 +1,13 @@
+{
+  "status": "success",
+  "message": "I have processed your Excel file successfully. I've analyzed the data and applied the requested transformations.",
+  "data": {
+    "download_url": "/demo_processed.xlsx",
+    "filename": "Processed_Analysis_Report.xlsx",
+    "processed_at": "2026-05-16T17:53:21Z",
+    "summary": {
+      "rows_processed": 128,
+      "insights_found": 5
+    }
+  }
+}

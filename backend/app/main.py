@@ -14,9 +14,11 @@ we only ever handle the signature and the resulting `public_id`.
 from __future__ import annotations
 
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from agent.api import answer_question
 from agent.config import ROOT, settings
@@ -28,11 +30,34 @@ from app.schemas import (
     SignRequest,
     SignResponse,
 )
+from logger.zap import create_logger
+
+log = create_logger()
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    log.info("app_startup", profile=settings.profile, store=settings.store)
+    yield
+
 
 app = FastAPI(
     title="Runbook Agent",
     description="Grounded question answering over operational runbooks.",
     version="1.0.0",
+    lifespan=_lifespan,
+)
+
+# The frontend is a separate origin (the Vite dev server, or a deployed static
+# site) calling this API from the browser, so it needs an explicit allow-list
+# rather than the same-origin default. Origins come from settings, never
+# hardcoded, so a deployed frontend only needs an env var, not a code change.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -92,13 +117,26 @@ def ask(request: AskRequest) -> AskResponse:
         )
     except LLMUnavailable as exc:
         # Configuration, not a bug: no key, so the grounding step cannot run.
+        log.warning("ask_unavailable", error=str(exc))
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    # The question text itself is not logged - it is user input, not
+    # something this module should be deciding is safe to persist to disk.
+    log.info(
+        "ask",
+        confidence=result["confidence"],
+        cited_doc_count=len(result["cited_doc_ids"]),
+        elapsed_ms=elapsed_ms,
+        llm_calls=result.get("llm_calls", 0),
+    )
 
     return AskResponse(
         answer=result["answer"],
         cited_doc_ids=result["cited_doc_ids"],
         confidence=result["confidence"],
-        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        elapsed_ms=elapsed_ms,
         trace=result.get("trace") or [],
         llm_calls=result.get("llm_calls", 0),
     )
@@ -150,8 +188,9 @@ def eval_latest() -> JSONResponse:
 
 @app.get("/")
 def index():
-    """The single-page UI, or a pointer to the docs if it is not bundled."""
-    page = ROOT / "web" / "index.html"
-    if page.is_file():
-        return FileResponse(page)
+    """No bundled UI here - the frontend/ React app is the client.
+
+    This API is CORS-enabled for it (see `settings.cors_origin_list`) and
+    otherwise self-describes through OpenAPI.
+    """
     return JSONResponse({"detail": "See /docs for the API.", "health": "/health"})
