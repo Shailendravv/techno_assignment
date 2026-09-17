@@ -30,6 +30,7 @@ def answer_question(
     model_role: str = "generator",
     cfg: Settings | None = None,
     with_trace: bool = False,
+    with_metrics: bool = False,
 ) -> dict:
     """Answer a question from the runbooks, or decline to.
 
@@ -45,15 +46,25 @@ def answer_question(
     off by default because it is not part of the contract, and on in the CLI
     and the harness because that is where you need to know *why* an answer came
     out the way it did.
+
+    `with_metrics=True` adds `llm_calls`. It is a separate switch from
+    `with_trace` because the two differ in both cost and audience: the trace is
+    a verbose per-stage list for a human debugging one decision, while the
+    counter is a single integer worth reporting on every request. Keeping them
+    apart means a caller that reports the counter has to ask for it, so the
+    number it prints was measured rather than defaulted.
     """
     cfg = cfg or default_settings
 
     if not question or not question.strip():
-        return {
+        result = {
             "answer": "Ask me something about the runbooks.",
             "cited_doc_ids": [],
             "confidence": "no_match",
         }
+        if with_metrics:
+            result["llm_calls"] = 0
+        return result
 
     question = question.strip()
     started = time.perf_counter()
@@ -70,6 +81,7 @@ def answer_question(
         }
         if with_trace:
             result["trace"] = ["cache: exact hit, pipeline not run"]
+        if with_metrics:
             result["llm_calls"] = 0
         return result
 
@@ -101,5 +113,6 @@ def answer_question(
 
     if with_trace:
         result["trace"] = final.get("trace", [])
+    if with_metrics:
         result["llm_calls"] = final.get("llm_calls", 0)
     return result

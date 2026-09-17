@@ -174,7 +174,9 @@ def test_a_cache_hit_short_circuits_the_pipeline(cached_cfg, monkeypatch):
 
     monkeypatch.setattr("agent.graph.COMPILED.invoke", explode)
 
-    result = answer_question("checkout-api CPU", cfg=cached_cfg, with_trace=True)
+    result = answer_question(
+        "checkout-api CPU", cfg=cached_cfg, with_trace=True, with_metrics=True
+    )
 
     assert result["answer"] == "cached"
     assert result["llm_calls"] == 0

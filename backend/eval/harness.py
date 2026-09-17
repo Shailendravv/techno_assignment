@@ -51,7 +51,12 @@ def _run_one(
             result = answer_question_baseline(question.question, cfg=cfg)
             result.setdefault("llm_calls", 1)
         else:
-            result = answer_question(question.question, cfg=cfg, with_trace=True)
+            # `with_metrics` because the report totals these and `run_arm`
+            # paces on them: a counter left at 0 would both understate the
+            # run's cost and skip the delay that keeps it inside the tier.
+            result = answer_question(
+                question.question, cfg=cfg, with_trace=True, with_metrics=True
+            )
     except LLMUnavailable:
         raise
     except Exception as exc:  # noqa: BLE001 - one bad question must not end the run

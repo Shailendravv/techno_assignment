@@ -56,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
             model_role="reasoner" if args.reasoner else "generator",
             cfg=cfg,
             with_trace=args.trace or args.json,
+            # `--trace` prints the counter and `--json` serialises it, so it
+            # has to be asked for. Without this the CLI reports 0 for a run
+            # that did call the model - the one wrong value that looks right.
+            with_metrics=args.trace or args.json,
         )
     except LLMUnavailable as exc:
         # Missing configuration, not a failure of the agent. Say so plainly

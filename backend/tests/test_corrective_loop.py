@@ -274,7 +274,10 @@ def test_the_gate_still_short_circuits_before_the_grader(monkeypatch, cfg):
     _patch_all(monkeypatch, script)
 
     result = answer_question(
-        "How many vacation days do engineers get?", cfg=cfg, with_trace=True
+        "How many vacation days do engineers get?",
+        cfg=cfg,
+        with_trace=True,
+        with_metrics=True,
     )
 
     assert script.calls == 0

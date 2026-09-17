@@ -31,16 +31,20 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_dotenv() -> None:
-    """Read `.env` from the repository root, without overriding real env vars.
+    """Read `.env` from the repository root.
 
     Deliberately hand-rolled rather than a dependency: it is fifteen lines, and
     everything in `requirements.txt` has to be justified against Vercel's
-    bundle limit. Real environment variables win, so the deployed function uses
-    Vercel's configuration and ignores any `.env` that gets bundled by mistake.
+    bundle limit. On a cloud platform (Vercel, Lambda) real environment
+    variables win, so the deployed function uses the platform's configuration
+    and ignores any `.env` that gets bundled by mistake. Locally the reverse:
+    `.env` takes precedence, so editing it takes effect on the next reload
+    instead of being shadowed by a stale process environment.
     """
     path = ROOT / ".env"
     if not path.is_file():
         return
+    is_cloud = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -48,7 +52,7 @@ def _load_dotenv() -> None:
         key, _, value = line.partition("=")
         key = key.strip().removeprefix("export ").strip()
         value = value.strip().strip("\"'")
-        if key and key not in os.environ:
+        if key and (not is_cloud or key not in os.environ):
             os.environ[key] = value
 
 
@@ -353,6 +357,7 @@ def load_settings(profile: str | None = None) -> Settings:
     testable question rather than a deployment-time surprise.
     """
     global _profile
+    _load_dotenv()
     if profile is not None:
         previous = _profile
         _profile = load_profile(profile)

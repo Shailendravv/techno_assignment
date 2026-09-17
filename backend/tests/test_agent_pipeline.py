@@ -81,7 +81,9 @@ def test_an_empty_question_is_handled_without_calling_the_model(fake_llm):
 
 def test_a_gated_question_never_reaches_the_model(fake_llm):
     result = answer_question(
-        "What is the runbook for search-api high latency?", with_trace=True
+        "What is the runbook for search-api high latency?",
+        with_trace=True,
+        with_metrics=True,
     )
 
     assert result["confidence"] == "no_match"
@@ -92,7 +94,7 @@ def test_a_gated_question_never_reaches_the_model(fake_llm):
 
 def test_an_off_topic_question_is_gated(fake_llm):
     result = answer_question("How many vacation days do engineers get?",
-                             with_trace=True)
+                             with_trace=True, with_metrics=True)
 
     assert result["confidence"] == "no_match"
     assert result["llm_calls"] == 0
@@ -236,6 +238,10 @@ def test_post_ask_returns_the_contract_fields(fake_llm):
     assert body["cited_doc_ids"] == ["RB-001"]
     assert body["confidence"] == "high"
     assert body["elapsed_ms"] >= 0
+    # Reported whether or not `explain` was asked for. This request cost a
+    # grounding call, and a response claiming zero would be a cost figure that
+    # had defaulted rather than been measured.
+    assert body["llm_calls"] == 1
 
 
 def test_post_ask_returns_200_for_no_match_not_an_error(fake_llm):
@@ -259,3 +265,46 @@ def test_post_ask_rejects_an_unknown_model_role():
         "/ask", json={"question": "anything", "model_role": "gpt-9"}
     )
     assert response.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# The other two entry points report the counter too.
+#
+# `llm_calls` is opt-in (`with_metrics`), so every caller that prints or
+# records the number has to ask for it. A caller that forgets does not fail -
+# it silently reports 0, which reads as "this path never called the model".
+# That is the most misleading value the field can take, so each such caller
+# gets a test.
+# --------------------------------------------------------------------------
+
+def test_the_cli_reports_the_calls_it_actually_made(fake_llm, capsys):
+    from agent.__main__ import main
+
+    fake_llm.reply = {"answer": "Check the deploy log.", "cited_doc_ids": ["RB-001"]}
+
+    assert main(["checkout-api is running hot on CPU", "--trace"]) == 0
+    assert "llm calls: 1" in capsys.readouterr().out
+
+
+def test_the_harness_records_the_calls_each_question_cost(fake_llm):
+    """The report's `total_llm_calls` is the run's cost evidence - and
+    `run_arm` skips its inter-question `--delay` whenever a question cost
+    nothing, so a counter stuck at 0 would also unpace a full run straight
+    into the free tier's rate limit."""
+    from agent.config import settings
+    from eval.harness import _run_one
+    from eval.questions import EvalQuestion
+
+    fake_llm.reply = {"answer": "Check the deploy log.", "cited_doc_ids": ["RB-001"]}
+
+    result = _run_one(
+        EvalQuestion(
+            id=1,
+            question="checkout-api is running hot on CPU",
+            expected_doc_ids=["RB-001"],
+        ),
+        arm="lexical",
+        cfg=settings,
+    )
+
+    assert result.llm_calls == 1

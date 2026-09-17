@@ -114,6 +114,10 @@ def ask(request: AskRequest) -> AskResponse:
             request.question,
             model_role=request.model_role,
             with_trace=request.explain,
+            # Always, regardless of `explain`: this is what the response and the
+            # access log both report, and a cost figure that silently defaults
+            # to zero is worse than no figure at all.
+            with_metrics=True,
         )
     except LLMUnavailable as exc:
         # Configuration, not a bug: no key, so the grounding step cannot run.

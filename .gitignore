@@ -19,3 +19,6 @@ site/
 
 # Application logs (logger/zap.py, local profile only)
 logs/
+
+# Playwright MCP session artifacts (snapshots, screenshots)
+.playwright-mcp/

@@ -49,7 +49,12 @@ _client = None
 def _get_client(cfg: Settings):
     global _client
     if _client is not None:
-        return _client
+        # Keyed on the api key, not just "is it built": `_load_dotenv` now lets
+        # a local `.env` edit change the key inside a live process, and a
+        # client cached under the old one would keep using it silently.
+        if getattr(_client, "api_key", None) == cfg.groq_api_key:
+            return _client
+        _client = None
     if not cfg.groq_api_key:
         raise LLMUnavailable(
             "GROQ_API_KEY is not set. Retrieval-only paths still work; "
@@ -104,6 +109,7 @@ def chat(
 
     last: Exception | None = None
     for attempt in range(cfg.llm_max_retries):
+        started = time.perf_counter()
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -112,6 +118,27 @@ def chat(
                 max_tokens=max_tokens,
             )
             text = response.choices[0].message.content or ""
+
+            # One line per request that reached Groq. This is the only place
+            # that knows a call actually went out - every count further up is
+            # derived from what this function returns - so a run's real API
+            # usage is reconstructable from the log alone.
+            #
+            # Tokens are logged because the free tier's binding limit is 8k
+            # *per minute*, not requests per day: a 429 is predictable from
+            # token spend and from nothing else.
+            usage = getattr(response, "usage", None)
+            log.info(
+                "llm_call",
+                model=model,
+                role=role,
+                attempt=attempt + 1,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                prompt_tokens=getattr(usage, "prompt_tokens", 0),
+                completion_tokens=getattr(usage, "completion_tokens", 0),
+                total_tokens=getattr(usage, "total_tokens", 0),
+            )
+
             return LLMResult(
                 text=_THINK_BLOCK.sub("", text).strip(),
                 model=model,
@@ -120,6 +147,17 @@ def chat(
         except Exception as exc:  # noqa: BLE001 - re-raised below
             last = exc
             if not _is_rate_limit(exc) or attempt == cfg.llm_max_retries - 1:
+                # A request that failed still reached Groq and still counted
+                # against the quota. Logging only successes would produce a
+                # local record that cannot be reconciled with their dashboard.
+                log.error(
+                    "llm_call_failed",
+                    model=model,
+                    role=role,
+                    attempt=attempt + 1,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
                 raise
             wait_s = _retry_after(exc, attempt)
             log.warning(
