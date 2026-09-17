@@ -22,6 +22,11 @@ class AgentState(TypedDict, total=False):
     question: str
     model_role: str  # "generator" (default) or "reasoner"
 
+    # Carried through state rather than read from the module, so a test or the
+    # harness can run the graph with different thresholds without mutating
+    # global configuration.
+    settings: object  # agent.config.Settings
+
     # Set by the analyze node
     spec: QuerySpec
 

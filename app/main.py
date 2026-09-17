@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
+from agent.api import answer_question
 from agent.config import settings
-from app.schemas import HealthResponse
+from agent.llm import LLMUnavailable
+from app.schemas import AskRequest, AskResponse, HealthResponse
 
 app = FastAPI(
     title="Runbook Agent",
@@ -42,4 +44,28 @@ def health() -> HealthResponse:
         store=settings.store,
         retrieval_mode=settings.retrieval.mode,
         groq_configured=settings.has_groq,
+    )
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask(request: AskRequest) -> AskResponse:
+    """Answer a question from the runbooks, or decline to.
+
+    A `no_match` response is a 200, not a 404. The agent declining to answer is
+    a successful outcome - arguably the most valuable one it produces - and
+    signalling it as an error would invite clients to treat it as a fault and
+    retry, or to hide it.
+    """
+    started = time.perf_counter()
+    try:
+        result = answer_question(request.question, model_role=request.model_role)
+    except LLMUnavailable as exc:
+        # Configuration, not a bug: no key, so the grounding step cannot run.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return AskResponse(
+        answer=result["answer"],
+        cited_doc_ids=result["cited_doc_ids"],
+        confidence=result["confidence"],
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
     )

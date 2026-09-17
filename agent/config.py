@@ -12,6 +12,32 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _load_dotenv() -> None:
+    """Read `.env` from the repository root, without overriding real env vars.
+
+    Deliberately hand-rolled rather than a dependency: it is fifteen lines, and
+    everything in `requirements.txt` has to be justified against Vercel's
+    bundle limit. Real environment variables win, so the deployed function uses
+    Vercel's configuration and ignores any `.env` that gets bundled by mistake.
+    """
+    path = Path(__file__).resolve().parent.parent / ".env"
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().removeprefix("export ").strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv()
 
 
 def _env(name: str, default: str) -> str:
