@@ -63,14 +63,20 @@ class Retrieval:
     # have no corpus-specific reason to move it.
     rrf_k: int = _env_int("RRF_K", 60)
 
-    # The relevance floor, as a fraction of the best possible score for this
-    # query. Raw BM25 scores are not comparable across queries, so we normalise
-    # per-query before comparing - see core/retrieve.py.
+    # Best BM25 score per content term. Raw BM25 scores are not comparable
+    # across queries - a longer question scores higher just by having more
+    # words - so we divide by query length before comparing.
     #
     # Too high and we reject real questions (MISSED). Too low and we cite
     # rubbish (FALSE_CITATION). Phase 4 sweeps this; the default is a starting
     # point, not a measured optimum.
     lexical_floor: float = _env_float("LEXICAL_FLOOR", 0.35)
+
+    # Fraction of the question's content words that must appear somewhere in
+    # the corpus. This catches the off-topic question that BM25 still ranks
+    # confidently: "refund" appears in no document, so however good the nearest
+    # match looks, the corpus is not about that.
+    coverage_floor: float = _env_float("COVERAGE_FLOOR", 0.60)
 
     # Absolute cosine floor for the dense arm. Unrelated text still lands around
     # 0.6-0.7 with most embedding models, which is exactly why dense retrieval

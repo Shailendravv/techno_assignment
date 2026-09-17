@@ -62,6 +62,13 @@ class QuerySpec:
     intent: str  # "diagnose" | "rollback" | "policy" | "postmortem"
     date: str | None
 
+    # A service-shaped name the question mentions that the corpus has no
+    # documents for - "search-api", say. This is positive evidence that we
+    # cannot answer, as opposed to `service=None`, which merely means the
+    # question did not name one. The two need to be distinguishable: the first
+    # should short-circuit to no_match, the second should not.
+    unknown_service: str | None = None
+
 
 @dataclass
 class Candidate:
