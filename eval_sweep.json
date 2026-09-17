@@ -1,0 +1,106 @@
+{
+  "sweep": [
+    {
+      "floor": 0.0,
+      "gated": 2,
+      "missed": 0,
+      "admitted_no_match": 3
+    },
+    {
+      "floor": 0.05,
+      "gated": 2,
+      "missed": 0,
+      "admitted_no_match": 3
+    },
+    {
+      "floor": 0.1,
+      "gated": 2,
+      "missed": 0,
+      "admitted_no_match": 3
+    },
+    {
+      "floor": 0.15,
+      "gated": 2,
+      "missed": 0,
+      "admitted_no_match": 3
+    },
+    {
+      "floor": 0.2,
+      "gated": 2,
+      "missed": 0,
+      "admitted_no_match": 3
+    },
+    {
+      "floor": 0.25,
+      "gated": 2,
+      "missed": 0,
+      "admitted_no_match": 3
+    },
+    {
+      "floor": 0.3,
+      "gated": 2,
+      "missed": 0,
+      "admitted_no_match": 3
+    },
+    {
+      "floor": 0.35,
+      "gated": 3,
+      "missed": 0,
+      "admitted_no_match": 2
+    },
+    {
+      "floor": 0.4,
+      "gated": 3,
+      "missed": 0,
+      "admitted_no_match": 2
+    },
+    {
+      "floor": 0.45,
+      "gated": 3,
+      "missed": 0,
+      "admitted_no_match": 2
+    },
+    {
+      "floor": 0.5,
+      "gated": 3,
+      "missed": 0,
+      "admitted_no_match": 2
+    },
+    {
+      "floor": 0.55,
+      "gated": 4,
+      "missed": 0,
+      "admitted_no_match": 1
+    },
+    {
+      "floor": 0.6,
+      "gated": 4,
+      "missed": 0,
+      "admitted_no_match": 1
+    },
+    {
+      "floor": 0.65,
+      "gated": 5,
+      "missed": 1,
+      "admitted_no_match": 1
+    },
+    {
+      "floor": 0.7,
+      "gated": 6,
+      "missed": 2,
+      "admitted_no_match": 1
+    },
+    {
+      "floor": 0.75,
+      "gated": 7,
+      "missed": 3,
+      "admitted_no_match": 1
+    },
+    {
+      "floor": 0.8,
+      "gated": 12,
+      "missed": 7,
+      "admitted_no_match": 0
+    }
+  ]
+}
