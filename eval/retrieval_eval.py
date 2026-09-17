@@ -26,19 +26,14 @@ import json
 from dataclasses import asdict, dataclass, field
 
 from agent.config import Settings
-from agent.core.corpus import load_corpus
 from agent.core.query import analyze_query
 from agent.core.retrieve import (
     best_cosine,
-    bm25_search,
-    build_index,
     coverage,
-    dense_search,
     metadata_filter,
     normalised_top_score,
     passes_gate,
     passes_hybrid_gate,
-    rrf_fuse,
 )
 from eval.questions import EvalQuestion
 
@@ -70,54 +65,38 @@ class RetrievalResult:
     tags: list[str] = field(default_factory=list)
 
 
-def _build(cfg: Settings):
-    """Everything an arm needs, built once."""
-    docs = load_corpus(cfg.corpus_dir)
-    lexical_index = build_index(docs)
-    dense_index = None
-
-    if cfg.retrieval.is_hybrid:
-        from agent.embed import embedding_available, get_embedder
-        from agent.core.retrieve import build_dense_index
-
-        if embedding_available(cfg):
-            dense_index = build_dense_index(docs, get_embedder(cfg))
-
-    return docs, lexical_index, dense_index
-
-
 def run_retrieval(
     questions: list[EvalQuestion], cfg: Settings
 ) -> tuple[list[RetrievalResult], bool]:
     """Score one arm. Returns (results, dense_was_actually_used).
 
-    That second value matters: an arm configured as hybrid but running without
-    an embedder is silently lexical, and reporting it as hybrid would make the
-    comparison meaningless.
+    Goes through the configured store rather than reading the corpus directly,
+    so `--store supabase` actually exercises Postgres. That is what makes the
+    Phase 6 equivalence check a real comparison rather than two runs of the
+    same code path.
+
+    The second return value matters: an arm configured as hybrid but running
+    without an embedder is silently lexical, and reporting it as hybrid would
+    make the comparison meaningless.
     """
-    docs, lexical_index, dense_index = _build(cfg)
+    from agent.store import get_store
+
+    store = get_store(cfg)
+    docs = store.documents()
+    lexical_index = store.lexical_index()
     retrieval = cfg.retrieval
     results: list[RetrievalResult] = []
-
-    embedder = None
-    if dense_index is not None:
-        from agent.embed import get_embedder
-
-        embedder = get_embedder(cfg)
+    dense_used = False
 
     for question in questions:
         spec = analyze_query(question.question, docs)
-        lexical = bm25_search(lexical_index, spec, retrieval.bm25_top_k)
+        ranked, _ = store.retrieve(spec, question.question, cfg)
 
-        if dense_index is not None and embedder is not None:
-            dense = dense_search(
-                dense_index, embedder.embed_query(question.question), retrieval.dense_top_k
-            )
-            ranked = rrf_fuse(lexical, dense, retrieval.rrf_k)
-            gate = passes_hybrid_gate
-        else:
-            ranked = lexical
-            gate = passes_gate
+        # Which gate applies depends on whether the dense arm actually
+        # contributed, not on what the profile asked for.
+        dense_ran = any(c.dense_score > 0.0 for c in ranked)
+        dense_used = dense_used or dense_ran
+        gate = passes_hybrid_gate if dense_ran else passes_gate
 
         pack = metadata_filter(spec, ranked, retrieval.final_top_k)
         passed, why = gate(spec, pack, lexical_index, retrieval)
@@ -152,7 +131,7 @@ def run_retrieval(
             )
         )
 
-    return results, dense_index is not None
+    return results, dense_used
 
 
 def summarise_retrieval(results: list[RetrievalResult]) -> dict:

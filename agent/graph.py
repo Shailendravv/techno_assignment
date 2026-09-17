@@ -41,22 +41,16 @@ from langgraph.graph import END, StateGraph
 
 from agent.config import NO_MATCH_MESSAGE, Settings, settings as default_settings
 from agent.core.confidence import score_confidence
-from agent.core.corpus import load_corpus
 from agent.core.query import analyze_query
 from agent.core.retrieve import (
-    best_cosine,
-    bm25_search,
-    build_dense_index,
-    build_index,
-    dense_search,
     metadata_filter,
     passes_gate,
     passes_hybrid_gate,
-    rrf_fuse,
 )
 from agent.nodes.grade import grade_candidates, rewrite_query
 from agent.nodes.ground import ground
 from agent.state import AgentState
+from agent.store import get_store
 
 
 def _cfg(state: AgentState) -> Settings:
@@ -74,60 +68,16 @@ def _query(state: AgentState) -> str:
 
 
 # --------------------------------------------------------------------------
-# The dense index.
-#
-# Memoised on (corpus directory, embedder signature) rather than rebuilt per
-# request. Embedding seventy chunks is a second locally and an HTTP round trip
-# against Gemini; doing it per request would dominate every response, and on a
-# warm serverless instance it would be pure waste.
-#
-# The signature is in the key because two embedders produce incompatible
-# vectors - reusing one's index for the other is a dimension-mismatch crash at
-# best and silent nonsense at worst.
-# --------------------------------------------------------------------------
-_dense_indexes: dict[tuple[str, str], object] = {}
-
-
-def _get_dense_index(cfg: Settings):
-    """Build or fetch the dense index, or return None if it cannot be built.
-
-    Returning None rather than raising is deliberate. A missing API key or an
-    uninstalled embedder must degrade the system to lexical-only - which is a
-    complete, working retriever that answers nineteen of our twenty questions -
-    rather than failing the request. Degrading loudly in the trace and quietly
-    in the response is the right trade for an incident tool.
-    """
-    from agent.embed import embedding_available, get_embedder
-
-    if not embedding_available(cfg):
-        return None
-
-    key = (cfg.corpus_dir, cfg.embedding.signature)
-    if key in _dense_indexes:
-        return _dense_indexes[key]
-
-    try:
-        embedder = get_embedder(cfg)
-        index = build_dense_index(load_corpus(cfg.corpus_dir), embedder)
-    except Exception:  # noqa: BLE001 - degrade to lexical, see docstring
-        return None
-
-    _dense_indexes[key] = index
-    return index
-
-
-def reset_dense_index_cache() -> None:
-    """Drop the memoised indexes. For tests that switch profiles or corpora."""
-    _dense_indexes.clear()
-
-
-# --------------------------------------------------------------------------
 # Nodes
 # --------------------------------------------------------------------------
 
 def analyze_node(state: AgentState) -> dict:
     cfg = _cfg(state)
-    docs = load_corpus(cfg.corpus_dir)
+    # From the store, not from disk: the service and failure-mode vocabularies
+    # the analyser matches against are derived from whatever corpus is actually
+    # mounted, so adding a runbook teaches it without a code change - whichever
+    # backend that runbook lives in.
+    docs = get_store(cfg).documents()
     query = _query(state)
     spec = analyze_query(query, docs)
 
@@ -155,42 +105,30 @@ def retrieve_node(state: AgentState) -> dict:
     because that is the stage that discriminates near-duplicates, and it acts on
     document metadata - a fact no similarity score can out-vote. The gate last,
     on the survivors, because whether to answer at all depends on what is left.
+
+    Only the *ranking* step is delegated to the store, because that is the part
+    that genuinely differs between an in-memory BM25 index and a SQL statement
+    over pgvector. The filter and the gate stay here, in Python, with one
+    implementation - so swapping the backend cannot change what gets dropped or
+    what gets refused. That is what makes the Phase 6 equivalence test a
+    meaningful check rather than a comparison of two different systems.
     """
     cfg = _cfg(state)
     retrieval = cfg.retrieval
-    docs = load_corpus(cfg.corpus_dir)
-    index = build_index(docs)
     spec = state["spec"]
-    query = _query(state)
+    store = get_store(cfg)
 
-    lexical = bm25_search(index, spec, retrieval.bm25_top_k)
-    trace: list[str] = []
-
-    dense_index = _get_dense_index(cfg) if retrieval.is_hybrid else None
-    if retrieval.is_hybrid and dense_index is None:
-        # Asked for hybrid, cannot do hybrid. Say so rather than reporting a
-        # hybrid run that was quietly lexical - that would corrupt any
-        # comparison between the two arms.
-        trace.append(
-            "retrieve: hybrid requested but no embedder is available - "
-            "falling back to lexical-only"
-        )
-
-    if dense_index is not None:
-        from agent.embed import get_embedder
-
-        query_vector = get_embedder(cfg).embed_query(query)
-        dense = dense_search(dense_index, query_vector, retrieval.dense_top_k)
-        ranked = rrf_fuse(lexical, dense, retrieval.rrf_k)
-        trace.append(
-            "retrieve: dense top "
-            + ", ".join(f"{c.doc_id}({c.dense_score:.2f})" for c in dense[:3])
-        )
-    else:
-        ranked = lexical
+    ranked, trace = store.retrieve(spec, _query(state), cfg)
+    index = store.lexical_index()
 
     kept = metadata_filter(spec, ranked, retrieval.final_top_k)
-    gate = passes_hybrid_gate if dense_index is not None else passes_gate
+
+    # Which gate depends on whether the dense arm actually contributed, not on
+    # what the profile asked for. A hybrid run that silently fell back to
+    # lexical must be gated as lexical, or it would be held to a floor no
+    # candidate has a score for.
+    dense_ran = any(c.dense_score > 0.0 for c in ranked)
+    gate = passes_hybrid_gate if dense_ran else passes_gate
     passed, why = gate(spec, kept, index, retrieval)
 
     trace.insert(

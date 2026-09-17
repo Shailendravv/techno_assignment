@@ -1,0 +1,104 @@
+"""Where the corpus and the index live: on disk, or in Postgres.
+
+The `Store` protocol is drawn at a very specific line, and the line is the
+point of the whole phase.
+
+    the store RANKS          - lexical, dense, and the fusion of the two
+    Python FILTERS and GATES - the metadata rules, and whether to answer at all
+
+So a store is responsible for "which documents look relevant, in what order",
+which is the part that genuinely differs between an in-memory BM25 index and a
+SQL statement over pgvector. It is *not* responsible for the metadata filter or
+the gate, which stay in `agent.core` as pure functions with one implementation
+and one test suite.
+
+That matters because the metadata filter is the component this exercise turns
+on. Letting each backend own a copy of it would mean the rule that wins the
+exercise existed twice, drifting apart, with the tests only ever covering one.
+
+The SQL backend *does* also apply the filter - as a pre-filter, inside the
+query, because filtering after ranking means asking for the top 8 and keeping
+three. But Python re-applies it afterwards and remains authoritative. Since SQL
+has already dropped everything Python would, that second pass should drop
+nothing, and `SupabaseStore` reports it loudly when it does. The SQL is an
+optimisation whose divergence from the source of truth is detectable rather
+than silent.
+"""
+
+from __future__ import annotations
+
+from typing import Protocol
+
+from agent.config import Settings, settings as default_settings
+from agent.core.models import Candidate, Doc, QuerySpec
+from agent.core.retrieve import LexicalIndex
+
+
+class StoreUnavailable(RuntimeError):
+    """The configured store cannot be reached or is not configured."""
+
+
+class Store(Protocol):
+    """What the graph is allowed to assume about where documents live."""
+
+    name: str
+
+    def documents(self) -> tuple[Doc, ...]:
+        """Every document, for the baseline arm and for `/health`."""
+
+    def lexical_index(self) -> LexicalIndex:
+        """A local index, used only for the gate's corpus-coverage measure.
+
+        Deliberately local even for the SQL backend. Coverage asks "do this
+        question's words appear anywhere in the corpus at all", and the answer
+        must not depend on which backend is mounted or the two would gate
+        differently - which would make the equivalence test meaningless.
+        Twelve documents is a cheap thing to hold.
+        """
+
+    def retrieve(
+        self, spec: QuerySpec, query: str, cfg: Settings
+    ) -> tuple[list[Candidate], list[str]]:
+        """Ranked candidates and trace lines. Fused, not yet filtered or gated."""
+
+    def health(self) -> dict:
+        """Enough to tell, from `/health`, whether this store is actually usable."""
+
+
+def get_store(cfg: Settings | None = None) -> Store:
+    """The store the active profile asks for.
+
+    Falls back to files when Supabase is selected but not configured. A missing
+    credential should leave a working system reading the repository, not a 500
+    from every request - the corpus is checked in, so files is always available.
+    """
+    cfg = cfg or default_settings
+
+    if cfg.store == "supabase":
+        from agent.store.supabase_store import SupabaseStore
+
+        if cfg.supabase.configured:
+            return SupabaseStore(cfg)
+
+    from agent.store.file_store import FileStore
+
+    return FileStore(cfg)
+
+
+def store_kind(cfg: Settings | None = None) -> str:
+    """What is actually mounted, which may not be what was asked for."""
+    cfg = cfg or default_settings
+    if cfg.store == "supabase" and not cfg.supabase.configured:
+        return "files (supabase requested but not configured)"
+    return cfg.store
+
+
+__all__ = [
+    "Candidate",
+    "Doc",
+    "QuerySpec",
+    "Store",
+    "StoreUnavailable",
+    "get_store",
+    "store_kind",
+]

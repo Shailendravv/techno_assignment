@@ -154,9 +154,20 @@ def main(argv: list[str] | None = None) -> int:
         "--profile",
         help="config profile to load (default: APP_ENV, or 'local')",
     )
+    parser.add_argument(
+        "--store",
+        choices=("files", "supabase"),
+        help=(
+            "override the storage backend. Running the same questions through "
+            "both and diffing the outcomes is how the Phase 6 migration is "
+            "shown to be behaviour-preserving."
+        ),
+    )
     args = parser.parse_args(argv)
 
     cfg = load_settings(args.profile) if args.profile else load_settings()
+    if args.store:
+        cfg = replace(cfg, store=args.store)
     questions = GIVEN_QUESTIONS if args.given_only else ALL_QUESTIONS
 
     if args.sweep:
