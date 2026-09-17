@@ -1,0 +1,953 @@
+{
+  "stage": "retrieval",
+  "arms": {
+    "lexical": {
+      "stage": "retrieval",
+      "arm": "lexical",
+      "dense_arm_active": false,
+      "outcomes": {
+        "RETRIEVED": 14,
+        "NOT_RETRIEVED": 1,
+        "GATED": 0,
+        "STOPPED": 4,
+        "ADMITTED": 1
+      },
+      "retrieval_recall": 0.933,
+      "top1_rate": 0.933,
+      "gate_stop_rate": 0.8,
+      "mean_rank_when_found": 1.0,
+      "counts": {
+        "total": 20,
+        "answerable": 15,
+        "unanswerable": 5
+      },
+      "per_question": [
+        {
+          "id": 1,
+          "question": "checkout-api is running hot on CPU - what should I check first?",
+          "expected": [
+            "RB-001"
+          ],
+          "pack": [
+            "RB-001",
+            "RB-005"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, top score 1.00 per term",
+          "lexical_score": 1.004,
+          "cosine_score": 0.0,
+          "coverage": 1.0,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 2,
+          "question": "We are seeing 'too many connections' errors on checkout-api - what is the likely cause?",
+          "expected": [
+            "RB-002"
+          ],
+          "pack": [
+            "RB-002",
+            "RB-012",
+            "RB-005"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, top score 1.49 per term",
+          "lexical_score": 1.493,
+          "cosine_score": 0.0,
+          "coverage": 0.75,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 3,
+          "question": "How do I safely roll back checkout-api to a previous version?",
+          "expected": [
+            "RB-005"
+          ],
+          "pack": [
+            "RB-005",
+            "RB-002",
+            "RB-001",
+            "RB-004"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 67%, top score 0.76 per term",
+          "lexical_score": 0.761,
+          "cosine_score": 0.0,
+          "coverage": 0.667,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 4,
+          "question": "We had a checkout-api incident on 2026-08-10 - what was the root cause and how was it fixed?",
+          "expected": [
+            "RB-012"
+          ],
+          "pack": [
+            "RB-012",
+            "RB-002",
+            "RB-005",
+            "RB-004"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, top score 3.34 per term",
+          "lexical_score": 3.336,
+          "cosine_score": 0.0,
+          "coverage": 1.0,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 5,
+          "question": "What is our policy for communicating an incident to customers?",
+          "expected": [
+            "RB-011"
+          ],
+          "pack": [
+            "RB-011",
+            "RB-009",
+            "RB-006",
+            "RB-012"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, top score 1.42 per term",
+          "lexical_score": 1.416,
+          "cosine_score": 0.0,
+          "coverage": 0.75,
+          "tags": [
+            "given",
+            "general-doc"
+          ]
+        },
+        {
+          "id": 6,
+          "question": "payments-api CPU is pegged above 85%. Where do I start?",
+          "expected": [
+            "RB-003"
+          ],
+          "pack": [
+            "RB-003",
+            "RB-006",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 83%, top score 1.81 per term",
+          "lexical_score": 1.815,
+          "cosine_score": 0.0,
+          "coverage": 0.833,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 7,
+          "question": "checkout-api containers keep restarting with exit code 137. What is going on?",
+          "expected": [
+            "RB-004"
+          ],
+          "pack": [
+            "RB-004",
+            "RB-005",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, top score 1.25 per term",
+          "lexical_score": 1.25,
+          "cosine_score": 0.0,
+          "coverage": 0.75,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 8,
+          "question": "What is the rollback procedure for payments-api?",
+          "expected": [
+            "RB-006"
+          ],
+          "pack": [
+            "RB-006",
+            "RB-003",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, top score 3.45 per term",
+          "lexical_score": 3.451,
+          "cosine_score": 0.0,
+          "coverage": 1.0,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 9,
+          "question": "inventory-api is refusing connections with 'too many clients already'. What should I do?",
+          "expected": [
+            "RB-007"
+          ],
+          "pack": [
+            "RB-007"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 86%, top score 2.20 per term",
+          "lexical_score": 2.204,
+          "cosine_score": 0.0,
+          "coverage": 0.857,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 10,
+          "question": "The inventory sync lag alert is firing. How do I stop overselling?",
+          "expected": [
+            "RB-008"
+          ],
+          "pack": [
+            "RB-008",
+            "RB-010",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 71%, top score 1.84 per term",
+          "lexical_score": 1.841,
+          "cosine_score": 0.0,
+          "coverage": 0.714,
+          "tags": []
+        },
+        {
+          "id": 11,
+          "question": "The primary on-call has not acknowledged a page. How long before it escalates, and to whom?",
+          "expected": [
+            "RB-009"
+          ],
+          "pack": [
+            "RB-009",
+            "RB-002",
+            "RB-010",
+            "RB-012"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 89%, top score 1.42 per term",
+          "lexical_score": 1.421,
+          "cosine_score": 0.0,
+          "coverage": 0.889,
+          "tags": [
+            "general-doc"
+          ]
+        },
+        {
+          "id": 12,
+          "question": "When are we allowed to deploy to production?",
+          "expected": [
+            "RB-010"
+          ],
+          "pack": [
+            "RB-010",
+            "RB-009",
+            "RB-011",
+            "RB-005"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, top score 2.66 per term",
+          "lexical_score": 2.655,
+          "cosine_score": 0.0,
+          "coverage": 1.0,
+          "tags": [
+            "general-doc"
+          ]
+        },
+        {
+          "id": 13,
+          "question": "What is expand-and-contract and why do migrations need two releases?",
+          "expected": [
+            "RB-010"
+          ],
+          "pack": [
+            "RB-010",
+            "RB-005",
+            "RB-006",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, top score 1.96 per term",
+          "lexical_score": 1.957,
+          "cosine_score": 0.0,
+          "coverage": 1.0,
+          "tags": [
+            "general-doc"
+          ]
+        },
+        {
+          "id": 14,
+          "question": "The checkout service is dragging its feet and the boxes are working too hard.",
+          "expected": [
+            "RB-001"
+          ],
+          "pack": [
+            "RB-002",
+            "RB-012",
+            "RB-004",
+            "RB-009"
+          ],
+          "outcome": "NOT_RETRIEVED",
+          "rank": 0,
+          "gate_passed": true,
+          "gate_reason": "coverage 62%, top score 0.70 per term",
+          "lexical_score": 0.7,
+          "cosine_score": 0.0,
+          "coverage": 0.625,
+          "tags": [
+            "vocabulary-mismatch"
+          ]
+        },
+        {
+          "id": 15,
+          "question": "We are taking orders for things that are not actually sitting in the warehouse. What is the fix?",
+          "expected": [
+            "RB-008"
+          ],
+          "pack": [
+            "RB-008",
+            "RB-011",
+            "RB-007",
+            "RB-002"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, top score 1.20 per term",
+          "lexical_score": 1.198,
+          "cosine_score": 0.0,
+          "coverage": 0.75,
+          "tags": [
+            "vocabulary-mismatch"
+          ]
+        },
+        {
+          "id": 16,
+          "question": "What is our refund policy for orders over $500?",
+          "expected": [],
+          "pack": [
+            "RB-004",
+            "RB-007",
+            "RB-002",
+            "RB-001"
+          ],
+          "outcome": "ADMITTED",
+          "rank": 0,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, top score 0.94 per term",
+          "lexical_score": 0.944,
+          "cosine_score": 0.0,
+          "coverage": 0.75,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 17,
+          "question": "How do I restart the recommendation-engine service?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "question is about 'recommendation-engine', which no document covers",
+          "lexical_score": 1.387,
+          "cosine_score": 0.0,
+          "coverage": 0.667,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 18,
+          "question": "What is the runbook for search-api high latency?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "question is about 'search-api', which no document covers",
+          "lexical_score": 1.504,
+          "cosine_score": 0.0,
+          "coverage": 0.75,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 19,
+          "question": "How many vacation days do engineers get?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "only 50% of the question's content words appear anywhere in the corpus (floor 60%)",
+          "lexical_score": 0.971,
+          "cosine_score": 0.0,
+          "coverage": 0.5,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 20,
+          "question": "What is our process for renewing SSL certificates before they expire?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "only 33% of the question's content words appear anywhere in the corpus (floor 60%)",
+          "lexical_score": 0.714,
+          "cosine_score": 0.0,
+          "coverage": 0.333,
+          "tags": [
+            "no-match"
+          ]
+        }
+      ],
+      "note": "Retrieval-stage only. These are NOT the brief's four outcomes: no model was called, so nothing here is a citation. ADMITTED means the retrieval gate passed a question to the grounding model, which is the second gate and may still refuse it."
+    },
+    "hybrid": {
+      "stage": "retrieval",
+      "arm": "hybrid",
+      "dense_arm_active": true,
+      "outcomes": {
+        "RETRIEVED": 15,
+        "NOT_RETRIEVED": 0,
+        "GATED": 0,
+        "STOPPED": 4,
+        "ADMITTED": 1
+      },
+      "retrieval_recall": 1.0,
+      "top1_rate": 0.933,
+      "gate_stop_rate": 0.8,
+      "mean_rank_when_found": 1.2,
+      "counts": {
+        "total": 20,
+        "answerable": 15,
+        "unanswerable": 5
+      },
+      "per_question": [
+        {
+          "id": 1,
+          "question": "checkout-api is running hot on CPU - what should I check first?",
+          "expected": [
+            "RB-001"
+          ],
+          "pack": [
+            "RB-001",
+            "RB-005"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, lexical 1.00 per term",
+          "lexical_score": 1.004,
+          "cosine_score": 0.812,
+          "coverage": 1.0,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 2,
+          "question": "We are seeing 'too many connections' errors on checkout-api - what is the likely cause?",
+          "expected": [
+            "RB-002"
+          ],
+          "pack": [
+            "RB-002",
+            "RB-012",
+            "RB-005"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, lexical 1.49 per term",
+          "lexical_score": 1.493,
+          "cosine_score": 0.887,
+          "coverage": 0.75,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 3,
+          "question": "How do I safely roll back checkout-api to a previous version?",
+          "expected": [
+            "RB-005"
+          ],
+          "pack": [
+            "RB-005",
+            "RB-002",
+            "RB-012",
+            "RB-001"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 67%, lexical 0.76 per term",
+          "lexical_score": 0.761,
+          "cosine_score": 0.812,
+          "coverage": 0.667,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 4,
+          "question": "We had a checkout-api incident on 2026-08-10 - what was the root cause and how was it fixed?",
+          "expected": [
+            "RB-012"
+          ],
+          "pack": [
+            "RB-012",
+            "RB-005",
+            "RB-002",
+            "RB-004"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, lexical 3.34 per term",
+          "lexical_score": 3.336,
+          "cosine_score": 0.779,
+          "coverage": 1.0,
+          "tags": [
+            "given",
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 5,
+          "question": "What is our policy for communicating an incident to customers?",
+          "expected": [
+            "RB-011"
+          ],
+          "pack": [
+            "RB-011",
+            "RB-009",
+            "RB-006",
+            "RB-005"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, lexical 1.42 per term",
+          "lexical_score": 1.416,
+          "cosine_score": 0.863,
+          "coverage": 0.75,
+          "tags": [
+            "given",
+            "general-doc"
+          ]
+        },
+        {
+          "id": 6,
+          "question": "payments-api CPU is pegged above 85%. Where do I start?",
+          "expected": [
+            "RB-003"
+          ],
+          "pack": [
+            "RB-003",
+            "RB-006",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 83%, lexical 1.81 per term",
+          "lexical_score": 1.815,
+          "cosine_score": 0.836,
+          "coverage": 0.833,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 7,
+          "question": "checkout-api containers keep restarting with exit code 137. What is going on?",
+          "expected": [
+            "RB-004"
+          ],
+          "pack": [
+            "RB-004",
+            "RB-005",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, lexical 1.25 per term",
+          "lexical_score": 1.25,
+          "cosine_score": 0.805,
+          "coverage": 0.75,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 8,
+          "question": "What is the rollback procedure for payments-api?",
+          "expected": [
+            "RB-006"
+          ],
+          "pack": [
+            "RB-006",
+            "RB-003",
+            "RB-009",
+            "RB-010"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, lexical 3.45 per term",
+          "lexical_score": 3.451,
+          "cosine_score": 0.874,
+          "coverage": 1.0,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 9,
+          "question": "inventory-api is refusing connections with 'too many clients already'. What should I do?",
+          "expected": [
+            "RB-007"
+          ],
+          "pack": [
+            "RB-007"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 86%, lexical 2.20 per term",
+          "lexical_score": 2.204,
+          "cosine_score": 0.857,
+          "coverage": 0.857,
+          "tags": [
+            "near-duplicate-trap"
+          ]
+        },
+        {
+          "id": 10,
+          "question": "The inventory sync lag alert is firing. How do I stop overselling?",
+          "expected": [
+            "RB-008"
+          ],
+          "pack": [
+            "RB-008",
+            "RB-010",
+            "RB-009"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 71%, lexical 1.84 per term",
+          "lexical_score": 1.841,
+          "cosine_score": 0.862,
+          "coverage": 0.714,
+          "tags": []
+        },
+        {
+          "id": 11,
+          "question": "The primary on-call has not acknowledged a page. How long before it escalates, and to whom?",
+          "expected": [
+            "RB-009"
+          ],
+          "pack": [
+            "RB-009",
+            "RB-002",
+            "RB-007",
+            "RB-012"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 89%, lexical 1.42 per term",
+          "lexical_score": 1.421,
+          "cosine_score": 0.752,
+          "coverage": 0.889,
+          "tags": [
+            "general-doc"
+          ]
+        },
+        {
+          "id": 12,
+          "question": "When are we allowed to deploy to production?",
+          "expected": [
+            "RB-010"
+          ],
+          "pack": [
+            "RB-010",
+            "RB-011",
+            "RB-005",
+            "RB-007"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, lexical 2.66 per term",
+          "lexical_score": 2.655,
+          "cosine_score": 0.791,
+          "coverage": 1.0,
+          "tags": [
+            "general-doc"
+          ]
+        },
+        {
+          "id": 13,
+          "question": "What is expand-and-contract and why do migrations need two releases?",
+          "expected": [
+            "RB-010"
+          ],
+          "pack": [
+            "RB-010",
+            "RB-005",
+            "RB-006",
+            "RB-007"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 100%, lexical 1.96 per term",
+          "lexical_score": 1.957,
+          "cosine_score": 0.828,
+          "coverage": 1.0,
+          "tags": [
+            "general-doc"
+          ]
+        },
+        {
+          "id": 14,
+          "question": "The checkout service is dragging its feet and the boxes are working too hard.",
+          "expected": [
+            "RB-001"
+          ],
+          "pack": [
+            "RB-002",
+            "RB-012",
+            "RB-004",
+            "RB-001"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 4,
+          "gate_passed": true,
+          "gate_reason": "coverage 62%, lexical 0.70 per term",
+          "lexical_score": 0.7,
+          "cosine_score": 0.624,
+          "coverage": 0.625,
+          "tags": [
+            "vocabulary-mismatch"
+          ]
+        },
+        {
+          "id": 15,
+          "question": "We are taking orders for things that are not actually sitting in the warehouse. What is the fix?",
+          "expected": [
+            "RB-008"
+          ],
+          "pack": [
+            "RB-008",
+            "RB-011",
+            "RB-007",
+            "RB-002"
+          ],
+          "outcome": "RETRIEVED",
+          "rank": 1,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, lexical 1.20 per term",
+          "lexical_score": 1.198,
+          "cosine_score": 0.629,
+          "coverage": 0.75,
+          "tags": [
+            "vocabulary-mismatch"
+          ]
+        },
+        {
+          "id": 16,
+          "question": "What is our refund policy for orders over $500?",
+          "expected": [],
+          "pack": [
+            "RB-002",
+            "RB-007",
+            "RB-012",
+            "RB-003"
+          ],
+          "outcome": "ADMITTED",
+          "rank": 0,
+          "gate_passed": true,
+          "gate_reason": "coverage 75%, lexical 0.70 per term",
+          "lexical_score": 0.703,
+          "cosine_score": 0.576,
+          "coverage": 0.75,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 17,
+          "question": "How do I restart the recommendation-engine service?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "question is about 'recommendation-engine', which no document covers",
+          "lexical_score": 1.131,
+          "cosine_score": 0.636,
+          "coverage": 0.667,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 18,
+          "question": "What is the runbook for search-api high latency?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "question is about 'search-api', which no document covers",
+          "lexical_score": 0.814,
+          "cosine_score": 0.732,
+          "coverage": 0.75,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 19,
+          "question": "How many vacation days do engineers get?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "only 50% of the question's content words appear anywhere in the corpus (floor 60%); dense score 0.58 does not override this",
+          "lexical_score": 0.971,
+          "cosine_score": 0.58,
+          "coverage": 0.5,
+          "tags": [
+            "no-match"
+          ]
+        },
+        {
+          "id": 20,
+          "question": "What is our process for renewing SSL certificates before they expire?",
+          "expected": [],
+          "pack": [],
+          "outcome": "STOPPED",
+          "rank": 0,
+          "gate_passed": false,
+          "gate_reason": "only 33% of the question's content words appear anywhere in the corpus (floor 60%); dense score 0.64 does not override this",
+          "lexical_score": 0.491,
+          "cosine_score": 0.642,
+          "coverage": 0.333,
+          "tags": [
+            "no-match"
+          ]
+        }
+      ],
+      "note": "Retrieval-stage only. These are NOT the brief's four outcomes: no model was called, so nothing here is a citation. ADMITTED means the retrieval gate passed a question to the grounding model, which is the second gate and may still refuse it."
+    }
+  },
+  "comparison": {
+    "arms": [
+      "lexical",
+      "hybrid"
+    ],
+    "questions_where_arms_differ": [
+      {
+        "id": 14,
+        "question": "The checkout service is dragging its feet and the boxes are working too hard.",
+        "expected": [
+          "RB-001"
+        ],
+        "arms": {
+          "lexical": {
+            "outcome": "NOT_RETRIEVED",
+            "rank": 0,
+            "pack": [
+              "RB-002",
+              "RB-012",
+              "RB-004",
+              "RB-009"
+            ]
+          },
+          "hybrid": {
+            "outcome": "RETRIEVED",
+            "rank": 4,
+            "pack": [
+              "RB-002",
+              "RB-012",
+              "RB-004",
+              "RB-001"
+            ]
+          }
+        },
+        "verdict": {
+          "lexical": false,
+          "hybrid": true
+        }
+      }
+    ],
+    "summary": {
+      "lexical": {
+        "retrieval_recall": 0.933,
+        "top1_rate": 0.933,
+        "gate_stop_rate": 0.8
+      },
+      "hybrid": {
+        "retrieval_recall": 1.0,
+        "top1_rate": 0.933,
+        "gate_stop_rate": 0.8
+      }
+    }
+  }
+}

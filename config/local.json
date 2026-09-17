@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "Local development and the evaluation harness. Selected with APP_ENV=local,",
+    "which is the default when APP_ENV is unset.",
+    "",
+    "Keys are the same names the environment variables use, so there is one",
+    "namespace rather than a mapping table, and a real environment variable",
+    "always wins over anything written here.",
+    "",
+    "NO SECRETS IN THIS FILE. It is committed. API keys are read from the",
+    "environment only - see .env.example."
+  ],
+
+  "STORE_BACKEND": "files",
+  "CORPUS_DIR": "runbooks",
+
+  "EMBEDDER": "local",
+  "EMBEDDING_MODEL": "BAAI/bge-small-en-v1.5",
+  "EMBEDDING_DIMS": 384,
+  "EMBEDDING_CACHE_DIR": ".embeddings_cache",
+
+  "RETRIEVAL_MODE": "hybrid",
+  "BM25_TOP_K": 8,
+  "DENSE_TOP_K": 8,
+  "FINAL_TOP_K": 4,
+  "RRF_K": 60,
+
+  "LEXICAL_FLOOR": 0.35,
+  "COVERAGE_FLOOR": 0.6,
+  "COSINE_FLOOR": 0.75,
+
+  "GRADER_ENABLED": false,
+  "MAX_REWRITES": 1,
+
+  "ANSWER_CACHE": false,
+  "LLM_MAX_RETRIES": 3,
+  "LLM_TIMEOUT_S": 45.0
+}

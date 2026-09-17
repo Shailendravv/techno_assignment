@@ -27,6 +27,11 @@ class AgentState(TypedDict, total=False):
     # global configuration.
     settings: object  # agent.config.Settings
 
+    # The text retrieval actually searches for. Equal to `question` until the
+    # corrective loop rewrites it. The original is kept separately because the
+    # grounding model must be shown what the user asked, not our paraphrase.
+    search_query: str
+
     # Set by the analyze node
     spec: QuerySpec
 
@@ -38,7 +43,12 @@ class AgentState(TypedDict, total=False):
     raw_answer: str
     raw_cited_ids: list[str]
 
-    # Set by the grade node (Phase 5); how many rewrites we have spent
+    # Set by the grade node: the candidates the relevance grader kept. Distinct
+    # from `candidates` so the trace can show what each stage discarded.
+    graded: list[Candidate]
+
+    # How many rewrites the corrective loop has spent. Read by the edge that
+    # bounds the cycle - which is the only thing stopping it running forever.
     rewrites: int
 
     # Output, set by the finalize node
@@ -55,6 +65,7 @@ class AgentState(TypedDict, total=False):
 def new_state(question: str, model_role: str = "generator") -> AgentState:
     return AgentState(
         question=question,
+        search_query=question,
         model_role=model_role,
         candidates=[],
         gate_passed=False,

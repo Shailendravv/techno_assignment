@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "The deployed Vercel function. Selected with APP_ENV=dev.",
+    "",
+    "Two differences from local.json carry all the weight:",
+    "",
+    "1. EMBEDDER=gemini. fastembed ships ~200MB of onnxruntime plus a model",
+    "   download, which does not belong in a serverless bundle. Gemini is an",
+    "   HTTP call, so the deployed function stays small.",
+    "2. STORE_BACKEND=supabase. The deployed app is stateless; the index lives",
+    "   in Postgres rather than being rebuilt from disk on every cold start.",
+    "",
+    "NO SECRETS IN THIS FILE. GROQ_API_KEY, GEMINI_API_KEY, SUPABASE_* and",
+    "CLOUDINARY_* are set in the Vercel dashboard as environment variables."
+  ],
+
+  "STORE_BACKEND": "supabase",
+  "CORPUS_DIR": "runbooks",
+
+  "EMBEDDER": "gemini",
+  "EMBEDDING_MODEL": "gemini-embedding-001",
+  "EMBEDDING_DIMS": 768,
+  "EMBEDDING_CACHE_DIR": ".embeddings_cache",
+
+  "RETRIEVAL_MODE": "hybrid",
+  "BM25_TOP_K": 8,
+  "DENSE_TOP_K": 8,
+  "FINAL_TOP_K": 4,
+  "RRF_K": 60,
+
+  "LEXICAL_FLOOR": 0.35,
+  "COVERAGE_FLOOR": 0.6,
+  "COSINE_FLOOR": 0.75,
+
+  "GRADER_ENABLED": true,
+  "MAX_REWRITES": 1,
+
+  "ANSWER_CACHE": true,
+  "LLM_MAX_RETRIES": 3,
+  "LLM_TIMEOUT_S": 45.0
+}

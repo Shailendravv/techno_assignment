@@ -279,3 +279,201 @@ def passes_gate(
         )
 
     return True, f"coverage {cov:.0%}, top score {score:.2f} per term"
+
+
+# --------------------------------------------------------------------------
+# Phase 5: the dense arm.
+#
+# BM25 cannot match words that are not there. "The checkout service is dragging
+# its feet and the boxes are working too hard" is a question about CPU that
+# contains no CPU vocabulary, and lexical retrieval scores it near zero - the
+# single weakness this design named in advance as most likely to lose marks.
+#
+# An embedding model is trained on exactly that: mapping a paraphrase near the
+# text it paraphrases. So dense retrieval is added for **recall**, on the
+# explicit understanding that it is bad at the thing BM25 is good at. It is
+# trained to map near-duplicates close together, which is precisely wrong for a
+# corpus whose whole difficulty is telling near-duplicates apart.
+#
+# Hence the division of labour, which is the entire design of this phase:
+#
+#   dense retrieval finds candidates -> the metadata filter discriminates
+#
+# Fusion happens first; the filter runs on the fused list as a hard drop; the
+# gate runs last. The filter drops on document metadata, which no amount of
+# embedding similarity can blur - RB-003 says `service: payments-api` whatever
+# its prose resembles.
+# --------------------------------------------------------------------------
+
+class DenseIndex:
+    """Chunk vectors, and the map back to parent documents.
+
+    Retrieval is at chunk level for precision; scoring is collapsed to the
+    document level immediately after, because the brief's contract is document
+    IDs. A document's dense score is its *best* chunk, not its mean: a question
+    about escalation should be answered by the document with the best matching
+    escalation section, and averaging that against four unrelated sections
+    would bury it.
+    """
+
+    def __init__(self, docs: tuple[Doc, ...], chunks: list, vectors: list[list[float]]):
+        if len(chunks) != len(vectors):
+            raise ValueError(
+                f"{len(chunks)} chunks but {len(vectors)} vectors - the index is "
+                "inconsistent, which means it was built against a different corpus."
+            )
+        self.docs = docs
+        self.chunks = chunks
+        self.vectors = vectors
+        self.by_doc_id = {d.doc_id: d for d in docs}
+        self.dims = len(vectors[0]) if vectors else 0
+
+    def best_by_document(self, query_vector: list[float]) -> dict[str, tuple[float, str]]:
+        """Each document's best-matching chunk: doc_id -> (cosine, section)."""
+        from agent.embed import cosine
+
+        best: dict[str, tuple[float, str]] = {}
+        for chunk, vector in zip(self.chunks, self.vectors):
+            score = cosine(query_vector, vector)
+            current = best.get(chunk.doc_id)
+            if current is None or score > current[0]:
+                best[chunk.doc_id] = (score, chunk.section)
+        return best
+
+
+def build_dense_index(docs: tuple[Doc, ...], embedder) -> DenseIndex:
+    """Embed every `##` section of every document.
+
+    Twelve documents is about seventy chunks, which is one Gemini request and
+    about a second locally. Built once and held, not per query.
+    """
+    from agent.core.chunk import chunk_corpus
+
+    chunks = chunk_corpus(docs)
+    vectors = embedder.embed_documents([c.text for c in chunks])
+    return DenseIndex(docs, chunks, vectors)
+
+
+def dense_search(
+    index: DenseIndex, query_vector: list[float], top_k: int
+) -> list[Candidate]:
+    """Rank documents by their best-matching section."""
+    best = index.best_by_document(query_vector)
+    ranked = sorted(
+        (
+            Candidate(
+                doc=index.by_doc_id[doc_id],
+                dense_score=score,
+                reason=f"dense match on {section!r}",
+            )
+            for doc_id, (score, section) in best.items()
+        ),
+        key=lambda c: c.dense_score,
+        reverse=True,
+    )
+    return ranked[:top_k]
+
+
+def rrf_fuse(
+    lexical: list[Candidate], dense: list[Candidate], rrf_k: int = 60
+) -> list[Candidate]:
+    """Reciprocal rank fusion over the two ranked lists.
+
+    RRF combines *ranks*, not scores, and that is why it is the right choice
+    here rather than a weighted sum. A BM25 score and a cosine similarity are
+    not on the same scale, are not comparable across queries, and have no
+    principled conversion between them - any weighting we picked would be a
+    constant fitted to our own twenty questions. Ranks have none of those
+    problems, and RRF needs one parameter we did not choose ourselves.
+
+    A document appearing in both lists gets both contributions, so agreement
+    between two independent signals is rewarded without either being trusted to
+    dominate. The original scores are preserved on the candidate for the trace
+    and for the gate, which still needs them.
+    """
+    merged: dict[str, Candidate] = {}
+
+    for ranked in (lexical, dense):
+        for rank, candidate in enumerate(ranked, start=1):
+            existing = merged.get(candidate.doc_id)
+            if existing is None:
+                existing = Candidate(doc=candidate.doc)
+                merged[candidate.doc_id] = existing
+            # Each list contributes whichever score it actually computed; the
+            # other stays at whatever the sibling list set.
+            existing.lexical_score = max(existing.lexical_score, candidate.lexical_score)
+            existing.dense_score = max(existing.dense_score, candidate.dense_score)
+            existing.fused_score += 1.0 / (rrf_k + rank)
+
+    fused = sorted(merged.values(), key=lambda c: c.fused_score, reverse=True)
+    for candidate in fused:
+        candidate.reason = (
+            f"rrf={candidate.fused_score:.4f} "
+            f"(bm25={candidate.lexical_score:.1f}, cos={candidate.dense_score:.2f})"
+        )
+    return fused
+
+
+def best_cosine(candidates: list[Candidate]) -> float:
+    """The strongest dense score among the survivors, or 0.0 if there are none."""
+    return max((c.dense_score for c in candidates), default=0.0)
+
+
+def passes_hybrid_gate(
+    spec: QuerySpec,
+    candidates: list[Candidate],
+    index: LexicalIndex,
+    cfg: Retrieval,
+) -> tuple[bool, str]:
+    """The gate, when the dense arm is in play.
+
+    **Dense retrieval makes `no_match` harder, not easier, and this function is
+    where that cost is paid.** A vector search always returns its k nearest
+    neighbours; there is no such thing as "nothing matched". Unrelated text
+    still lands at cosine 0.6-0.7 against most embedding models, so a question
+    about refund policy retrieves *something* with a respectable-looking score.
+
+    So the rule is deliberately asymmetric: a question may clear the gate on
+    *either* signal, but the **corpus-coverage check binds regardless**. A
+    question whose vocabulary is largely absent from the corpus is rejected
+    however confident the vector space looks about it, because that check
+    measures something the embedder cannot see - whether this corpus is about
+    this subject at all - rather than how similar two strings are.
+
+    Without that, hybrid would trade `no_match` recall for citation recall, and
+    the brief is explicit that a confident wrong citation is the worse mistake.
+    """
+    if spec.unknown_service:
+        return False, (
+            f"question is about {spec.unknown_service!r}, which no document covers"
+        )
+
+    if not candidates:
+        return False, "every candidate was dropped by the metadata filter"
+
+    cov = coverage(spec.raw, index)
+    if cov < cfg.coverage_floor:
+        return False, (
+            f"only {cov:.0%} of the question's content words appear anywhere in "
+            f"the corpus (floor {cfg.coverage_floor:.0%}); dense score "
+            f"{best_cosine(candidates):.2f} does not override this"
+        )
+
+    lexical = normalised_top_score(candidates, spec.raw)
+    cosine_score = best_cosine(candidates)
+
+    if lexical >= cfg.lexical_floor:
+        return True, f"coverage {cov:.0%}, lexical {lexical:.2f} per term"
+
+    if cosine_score >= cfg.cosine_floor:
+        # The case this whole phase exists for: the question is about something
+        # in the corpus, but phrased in words the corpus does not use.
+        return True, (
+            f"coverage {cov:.0%}, lexical {lexical:.2f} below floor but dense "
+            f"{cosine_score:.2f} clears {cfg.cosine_floor:.2f} - vocabulary mismatch"
+        )
+
+    return False, (
+        f"neither signal clears its floor: lexical {lexical:.2f} < "
+        f"{cfg.lexical_floor:.2f}, dense {cosine_score:.2f} < {cfg.cosine_floor:.2f}"
+    )

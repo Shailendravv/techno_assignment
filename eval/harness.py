@@ -141,13 +141,30 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="sweep the gate floors and report how the two error types trade off",
     )
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help=(
+            "score the retrieval stage without calling any model - free, "
+            "deterministic, and needs no API key. This is how the lexical vs "
+            "hybrid comparison is measured."
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        help="config profile to load (default: APP_ENV, or 'local')",
+    )
     args = parser.parse_args(argv)
 
-    cfg = load_settings()
+    cfg = load_settings(args.profile) if args.profile else load_settings()
     questions = GIVEN_QUESTIONS if args.given_only else ALL_QUESTIONS
 
     if args.sweep:
         return _sweep(cfg, questions, args.out)
+
+    if args.retrieval_only:
+        arms = args.compare.split(",") if args.compare else [args.arm]
+        return _retrieval_only(cfg, questions, arms, args.out)
 
     arms = args.compare.split(",") if args.compare else [args.arm]
     for arm in arms:
@@ -207,6 +224,81 @@ def _print_comparison(reports: dict) -> None:
         print(f"  {label:22}" + "".join(f"{reports[a][key]:>11.0%} " for a in arms))
     print(f"  {'llm calls':22}" + "".join(f"{reports[a]['total_llm_calls']:>12}" for a in arms))
     print()
+
+
+def _retrieval_only(
+    cfg: Settings, questions: list[EvalQuestion], arms: list[str], out: str | None
+) -> int:
+    """Score retrieval without a model, and compare the arms side by side.
+
+    This is the answer to "does hybrid beat lexical". It is measured here
+    rather than through the full pipeline because the question is about
+    retrieval, and running it end to end would cost forty grounding calls and
+    then report a difference partly caused by model variance.
+    """
+    from eval.retrieval_eval import (
+        build_retrieval_report,
+        compare_arms,
+        format_retrieval_human,
+        run_retrieval,
+    )
+
+    reports: dict[str, dict] = {}
+    for arm in arms:
+        if arm == "baseline":
+            print("skipping 'baseline': it has no retrieval stage to score", flush=True)
+            continue
+
+        arm_cfg = _apply_mode(cfg, arm)
+        print(f"\nrunning arm: {arm}  ({len(questions)} questions, retrieval only)",
+              flush=True)
+        results, dense_used = run_retrieval(questions, arm_cfg)
+        reports[arm] = build_retrieval_report(arm, results, dense_used)
+
+        if arm == "hybrid" and not dense_used:
+            print(
+                "  WARNING: hybrid was requested but no embedder is available, "
+                "so this arm ran lexical-only. Install fastembed or set "
+                "GEMINI_API_KEY; the comparison is meaningless otherwise.",
+                flush=True,
+            )
+
+    if not reports:
+        print("nothing to score", file=sys.stderr)
+        return 2
+
+    print()
+    for report in reports.values():
+        print(format_retrieval_human(report))
+        print()
+
+    payload: dict
+    if len(reports) > 1:
+        comparison = compare_arms(reports)
+        payload = {"stage": "retrieval", "arms": reports, "comparison": comparison}
+
+        print("where the arms differ")
+        if not comparison["questions_where_arms_differ"]:
+            print("  nowhere - the arms are identical on this question set.")
+        for entry in comparison["questions_where_arms_differ"]:
+            print(f"  Q{entry['id']}  want={entry['expected'] or 'no_match'}")
+            for arm, detail in entry["arms"].items():
+                print(
+                    f"    {arm:9} {detail['outcome']:14} "
+                    f"rank={detail['rank']}  pack={detail['pack'] or '[]'}"
+                )
+        print()
+    else:
+        payload = next(iter(reports.values()))
+
+    if out:
+        with open(out, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        print(f"wrote {out}")
+    else:
+        print(json.dumps(payload, indent=2))
+
+    return 0
 
 
 def _sweep(cfg: Settings, questions: list[EvalQuestion], out: str | None) -> int:
