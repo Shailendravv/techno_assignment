@@ -1,8 +1,10 @@
-# Runtime - deployed to Vercel's Python function.
-# Keep this list small: Vercel's Python bundler does no tree-shaking, and
-# LangChain is a documented cause of bundle-size failures. We take langgraph
-# and langchain-core only, and call Groq and Gemini through their own SDKs
-# rather than the langchain-* provider wrappers.
+# Runtime - what ships to Vercel's Python function.
+#
+# Keep this list small and justify every line. Vercel's Python bundler does no
+# tree-shaking, LangChain is a documented cause of bundle-size failures, and
+# the limit is real. We take langgraph and langchain-core only, and talk to
+# Groq, Gemini, Supabase, Cloudinary and Langfuse through their HTTP APIs or
+# their own thin SDKs rather than through provider wrappers.
 fastapi==0.115.6
 pydantic==2.10.4
 groq==0.13.1
@@ -11,6 +13,12 @@ langchain-core==0.3.28
 rank-bm25==0.2.2
 python-frontmatter==1.1.0
 
-# Phase 5+. google-genai is small; fastembed is NOT and is excluded from the
-# deployed bundle via vercel.json - it serves the offline harness only.
+# Embeddings for the deployed (dev) profile. Small. The local profile uses
+# fastembed instead, which is a dev dependency and excluded from the bundle.
 google-genai==0.3.0
+
+# Deliberately NOT here, and talked to over stdlib urllib instead:
+#   supabase    - drags in gotrue, storage3, realtime, postgrest for what is
+#                 two JSON POSTs to PostgREST
+#   cloudinary  - three HTTP calls and a SHA-1
+#   langfuse    - one authenticated POST of a JSON batch

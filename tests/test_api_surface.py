@@ -62,6 +62,16 @@ def test_health_reports_whether_the_store_is_actually_reachable(client):
     assert body["store_reachable"] is True
 
 
+def test_health_distinguishes_the_store_mounted_from_the_store_requested(client):
+    """Supabase falls back to files when it is not configured. A health endpoint
+    that reported only the request would let a misconfigured deployment look
+    correct, which is the one thing it exists to prevent."""
+    body = client.get("/health").json()
+
+    assert body["store"] in ("files", "supabase")
+    assert body["store_requested"] in ("files", "supabase")
+
+
 def test_health_never_500s_even_when_the_store_is_broken(client, monkeypatch):
     def explode(*args, **kwargs):
         raise RuntimeError("database is on fire")

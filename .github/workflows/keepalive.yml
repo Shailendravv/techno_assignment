@@ -1,0 +1,59 @@
+name: keep-alive
+
+# A Supabase free project pauses after seven days of inactivity, and unpausing
+# it is a manual click in a dashboard. Discovering that the night before a demo
+# is the failure this workflow exists to prevent - so it runs weekly, well
+# inside the window, and it runs a real query rather than just a ping.
+#
+# Vercel does not pause, but a cold start hiding a broken deployment is worth
+# catching on a schedule too.
+
+on:
+  schedule:
+    # 06:10 on Mondays. Not on the hour: GitHub's scheduler is busiest then and
+    # delays cron jobs by up to an hour, which would eat into the margin.
+    - cron: "10 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the deployment is alive and its store is reachable
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "APP_URL is not set; nothing deployed yet. Skipping."
+            exit 0
+          fi
+
+          health=$(curl -sS --max-time 60 "$APP_URL/health")
+          echo "$health"
+
+          # "reachable" is the field that matters. A 200 from /health only says
+          # the function booted; this says Postgres answered.
+          echo "$health" | grep -q '"store_reachable":true' || {
+            echo "::error::The store is not reachable - Supabase may be paused."
+            exit 1
+          }
+
+      - name: Run one real query, so the database sees actual traffic
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then exit 0; fi
+
+          # Deliberately the no_match question. It exercises retrieval and the
+          # gate, costs no model call, and asserts the behaviour this system is
+          # actually built around - so a regression in the thing that matters
+          # most fails the cron rather than waiting for a demo.
+          answer=$(curl -sS --max-time 120 -X POST "$APP_URL/ask" \
+            -H 'content-type: application/json' \
+            -d '{"question":"What is our refund policy for orders over $500?"}')
+          echo "$answer"
+
+          echo "$answer" | grep -q '"confidence":"no_match"' || {
+            echo "::error::The off-topic question was not declined. The gate has regressed."
+            exit 1
+          }

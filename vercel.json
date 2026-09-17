@@ -2,9 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.py": {
-      "maxDuration": 60,
-      "excludeFiles": "{rag-production-case-study/**,tests/**,eval/**,ingest/**,baseline/**,web/**,supabase/**,.venv/**,**/*.md,**/__pycache__/**,**/*.npy}"
+      "maxDuration": 120,
+      "excludeFiles": "{tests/**,eval/**,ingest/**,baseline/**,docs/**,site/**,documents/**,supabase/**,.venv/**,.embeddings_cache/**,.code-review-graph/**,**/__pycache__/**,**/*.pyc,**/*.npy,**/*.onnx}"
     }
   },
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index" }
+  ]
 }

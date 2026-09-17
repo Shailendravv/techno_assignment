@@ -6,11 +6,11 @@ pytest-asyncio==0.25.0
 uvicorn==0.34.0
 httpx==0.28.1
 
-# Offline embeddings for a deterministic, un-rate-limited eval harness.
+# Offline embeddings, so the evaluation harness is deterministic, un-rate-limited
+# and runnable with no API key. ~200MB of onnxruntime plus a model download,
+# which is exactly why the deployed profile uses Gemini instead.
 fastembed==0.5.1
 
-# Ingestion pipeline (Phase 7), run locally or in GitHub Actions - never in a
-# request handler.
+# Ingestion only (Phase 7). Runs locally or in a GitHub Action, never inside a
+# request handler - which is also what keeps it out of the function bundle.
 pymupdf4llm==0.0.17
-cloudinary==1.42.0
-supabase==2.11.0

@@ -14,6 +14,7 @@ import json
 import sys
 
 from agent.api import answer_question
+from agent.config import load_settings
 from agent.llm import LLMUnavailable
 
 CONFIDENCE_MARK = {
@@ -41,13 +42,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="use the reasoning model instead of the default generator",
     )
+    parser.add_argument(
+        "--profile",
+        help="config profile to load: local (default) or dev",
+    )
     args = parser.parse_args(argv)
 
     question = " ".join(args.question)
+    cfg = load_settings(args.profile) if args.profile else None
     try:
         result = answer_question(
             question,
             model_role="reasoner" if args.reasoner else "generator",
+            cfg=cfg,
             with_trace=args.trace or args.json,
         )
     except LLMUnavailable as exc:

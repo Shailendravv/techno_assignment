@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Runbook Agent</title>
+<style>
+  /* One idea drives this page: a refusal is a result, not an error.
+     `no_match` gets the same visual weight as an answer - same card, same
+     typography, a neutral badge rather than a red one. Styling it as a failure
+     would teach the reader to treat the system's best feature as a fault. */
+  :root {
+    color-scheme: light;
+    --bg: #f7f7f5;
+    --card: #ffffff;
+    --ink: #1c1c1a;
+    --muted: #6b6b66;
+    --line: #e2e2dd;
+    --accent: #2f5d50;
+    --high: #2f5d50;
+    --medium: #7a6320;
+    --low: #8a5a2b;
+    --none: #55555a;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #17171a; --card: #202024; --ink: #ececea; --muted: #9a9a95;
+      --line: #32323a; --accent: #7fbca9;
+      --high: #7fbca9; --medium: #d6bd6a; --low: #d9a273; --none: #a0a0aa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: env(safe-area-inset-top, 0) 16px env(safe-area-inset-bottom, 0);
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding-block: 32px 64px; }
+
+  header h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  header p { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+
+  form { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1 1 320px; min-width: 0; padding: 11px 13px; font: inherit;
+    background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    padding: 11px 18px; font: inherit; font-weight: 550; cursor: pointer;
+    background: var(--accent); color: #fff; border: 0; border-radius: var(--radius);
+  }
+  button:disabled { opacity: .55; cursor: progress; }
+
+  .opts { display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+          margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .opts label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+
+  .examples { margin-top: 18px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .examples button {
+    background: transparent; color: var(--muted); border: 1px solid var(--line);
+    font-size: 12.5px; font-weight: 450; padding: 5px 10px; border-radius: 999px;
+  }
+
+  .card {
+    margin-top: 24px; background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .answer { white-space: pre-wrap; margin: 0; }
+
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 9px;
+    border-radius: 999px; border: 1px solid currentColor;
+  }
+  .badge.high { color: var(--high); } .badge.medium { color: var(--medium); }
+  .badge.low { color: var(--low); }   .badge.no_match { color: var(--none); }
+
+  .meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+          margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line);
+          font-size: 13px; color: var(--muted); }
+  .cites { display: flex; gap: 6px; flex-wrap: wrap; }
+  .cites a, .cites span {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+    padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px;
+    color: var(--ink); text-decoration: none;
+  }
+  .nocite { font-style: italic; }
+
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+  pre.trace {
+    margin: 10px 0 0; padding: 12px; overflow-x: auto; font-size: 12.5px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .err { border-color: #b4553f; }
+  footer { margin-top: 40px; font-size: 12.5px; color: var(--muted); }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Runbook Agent</h1>
+    <p>
+      Grounded question answering over twelve operational runbooks. It answers
+      only from documents it actually retrieved &mdash; and says so plainly when
+      none of them apply.
+    </p>
+  </header>
+
+  <form id="form">
+    <input id="q" type="text" autocomplete="off" required
+           placeholder="checkout-api is running hot on CPU — what should I check first?">
+    <button id="go" type="submit">Ask</button>
+  </form>
+
+  <div class="opts">
+    <label><input type="checkbox" id="explain" checked> show how it decided</label>
+    <label><input type="checkbox" id="reasoner"> use the slower reasoning model</label>
+  </div>
+
+  <div class="examples" id="examples"></div>
+
+  <div id="out"></div>
+
+  <footer>
+    <span id="health">checking…</span> ·
+    <a href="/docs">API</a> · <a href="/eval/latest">evaluation report</a>
+  </footer>
+
+</div>
+
+<script>
+// The last one is the point of the demo: nothing in the corpus answers it, and
+// the correct response is a refusal rather than the closest-sounding runbook.
+const EXAMPLES = [
+  "checkout-api is running hot on CPU — what should I check first?",
+  "We are seeing 'too many connections' errors on checkout-api — what is the likely cause?",
+  "How do I safely roll back checkout-api to a previous version?",
+  "What's our refund policy for orders over $500?"
+];
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+EXAMPLES.forEach(text => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = text.length > 52 ? text.slice(0, 50) + "…" : text;
+  button.title = text;
+  button.onclick = () => { $("q").value = text; $("form").requestSubmit(); };
+  $("examples").append(button);
+});
+
+const LABEL = {
+  high: "high confidence",
+  medium: "medium confidence",
+  low: "low confidence",
+  no_match: "no match"
+};
+
+function render(result) {
+  const declined = result.confidence === "no_match";
+  const cites = (result.cited_doc_ids || []).length
+    ? `<div class="cites">${result.cited_doc_ids.map(id =>
+        `<span>${esc(id)}</span>`).join("")}</div>`
+    // An empty citation list is a real result, not a missing one. Saying so
+    // explicitly stops it reading as a rendering bug.
+    : `<span class="nocite">no documents cited</span>`;
+
+  const trace = (result.trace && result.trace.length)
+    ? `<details${declined ? " open" : ""}>
+         <summary>how it decided (${result.trace.length} steps,
+           ${result.llm_calls} model call${result.llm_calls === 1 ? "" : "s"})</summary>
+         <pre class="trace">${esc(result.trace.join("\n"))}</pre>
+       </details>`
+    : "";
+
+  $("out").innerHTML = `
+    <div class="card">
+      <h2>${declined ? "No answer in the runbooks" : "Answer"}</h2>
+      <p class="answer">${esc(result.answer)}</p>
+      <div class="meta">
+        <span class="badge ${esc(result.confidence)}">${LABEL[result.confidence] || esc(result.confidence)}</span>
+        ${cites}
+        <span style="margin-left:auto">${result.elapsed_ms} ms</span>
+      </div>
+      ${trace}
+    </div>`;
+}
+
+$("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const question = $("q").value.trim();
+  if (!question) return;
+
+  $("go").disabled = true;
+  $("out").innerHTML = `<div class="card"><h2>Working</h2>
+    <p class="answer">Retrieving, filtering, and deciding whether to answer…</p></div>`;
+
+  try {
+    const response = await fetch("/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        question,
+        explain: $("explain").checked,
+        model_role: $("reasoner").checked ? "reasoner" : "generator"
+      })
+    });
+    const body = await response.json();
+
+    if (!response.ok) {
+      // A 503 here means no GROQ_API_KEY - configuration, not a fault in the
+      // agent. Say which, so the reader does not read it as a broken demo.
+      $("out").innerHTML = `<div class="card err"><h2>Cannot answer right now</h2>
+        <p class="answer">${esc(body.detail || response.statusText)}</p></div>`;
+      return;
+    }
+    render(body);
+  } catch (error) {
+    $("out").innerHTML = `<div class="card err"><h2>Network error</h2>
+      <p class="answer">${esc(error.message)}</p></div>`;
+  } finally {
+    $("go").disabled = false;
+  }
+});
+
+fetch("/health").then(r => r.json()).then(h => {
+  $("health").textContent =
+    `${h.corpus_docs} documents · ${h.retrieval_mode} retrieval · ` +
+    `${h.store} store · ${h.groq_configured ? "model ready" : "no model key"}`;
+}).catch(() => { $("health").textContent = "health check unavailable"; });
+</script>
+</body>
+</html>

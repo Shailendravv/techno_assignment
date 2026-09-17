@@ -51,7 +51,13 @@ class HealthResponse(BaseModel):
     profile: str
 
     corpus_docs: int
+
+    # What is actually serving, and what was asked for. They differ when
+    # Supabase is selected but not configured and the files backend takes over;
+    # a health endpoint that reported only the request would let a
+    # misconfigured deployment look correct.
     store: str
+    store_requested: str
     store_reachable: bool
     store_error: str = ""
 

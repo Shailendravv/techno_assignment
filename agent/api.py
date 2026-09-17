@@ -10,9 +10,15 @@ happens to resemble it.
 
 LangGraph lives inside this function, not around it. The graph is an
 implementation detail; the signature is the contract.
+
+The cache and the trace exporter wrap the graph here rather than inside it, for
+the same reason: they are concerns of the entry point, and a node that knew
+about either would be a node the harness could not run in isolation.
 """
 
 from __future__ import annotations
+
+import time
 
 from agent.config import NO_MATCH_MESSAGE, Settings, settings as default_settings
 from agent.graph import COMPILED
@@ -40,6 +46,8 @@ def answer_question(
     and the harness because that is where you need to know *why* an answer came
     out the way it did.
     """
+    cfg = cfg or default_settings
+
     if not question or not question.strip():
         return {
             "answer": "Ask me something about the runbooks.",
@@ -47,8 +55,26 @@ def answer_question(
             "confidence": "no_match",
         }
 
-    state = new_state(question.strip(), model_role=model_role)
-    state["settings"] = cfg or default_settings
+    question = question.strip()
+    started = time.perf_counter()
+
+    from agent.cache import get_cache
+
+    cache = get_cache(cfg)
+    hit = cache.get(question)
+    if hit is not None:
+        result = {
+            "answer": hit["answer"],
+            "cited_doc_ids": hit["cited_doc_ids"],
+            "confidence": hit["confidence"],
+        }
+        if with_trace:
+            result["trace"] = ["cache: exact hit, pipeline not run"]
+            result["llm_calls"] = 0
+        return result
+
+    state = new_state(question, model_role=model_role)
+    state["settings"] = cfg
 
     final = COMPILED.invoke(state)
 
@@ -57,6 +83,22 @@ def answer_question(
         "cited_doc_ids": final.get("cited_doc_ids", []),
         "confidence": final.get("confidence", "no_match"),
     }
+
+    # Cache the refusal too. A `no_match` is a considered result, and
+    # re-deriving it costs exactly what deriving it did.
+    cache.put(question, result)
+
+    from agent.observability import export_trace
+
+    export_trace(
+        question=question,
+        result=result,
+        trace=final.get("trace", []),
+        llm_calls=final.get("llm_calls", 0),
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        cfg=cfg,
+    )
+
     if with_trace:
         result["trace"] = final.get("trace", [])
         result["llm_calls"] = final.get("llm_calls", 0)

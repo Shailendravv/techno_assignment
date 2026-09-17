@@ -50,16 +50,27 @@ def health() -> HealthResponse:
     from agent.store import get_store
 
     try:
-        store_health = get_store(settings).health()
+        store = get_store(settings)
+        store_health = store.health()
+        mounted = store.name
     except Exception as exc:  # noqa: BLE001 - health must never 500
         store_health = {"reachable": False, "error": f"{type(exc).__name__}: {exc}"}
+        mounted = "none"
 
+    described = settings.describe()
+
+    # Report what is actually mounted, not what was asked for. Supabase falls
+    # back to files when it is not configured, and a health endpoint that hid
+    # that would let a misconfigured deployment look correct - which is the one
+    # thing a health endpoint exists to prevent.
     return HealthResponse(
         status="ok",
         corpus_docs=store_health.get("documents", 0),
         store_reachable=bool(store_health.get("reachable")),
         store_error=str(store_health.get("error") or ""),
-        **settings.describe(),
+        store_requested=described.pop("store"),
+        store=mounted,
+        **described,
     )
 
 
