@@ -21,7 +21,7 @@ full sweep.
 
 from __future__ import annotations
 
-from agent.config import Settings, settings as default_settings
+from agent.config import Settings, current_settings
 from agent.core.corpus import load_corpus
 from agent.core.models import Candidate
 from agent.llm import LLMBadJSON, chat_json
@@ -41,7 +41,7 @@ def answer_question_baseline(
     there is simply less evidence to grade with. That is itself part of what
     the comparison shows.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     docs = load_corpus(cfg.corpus_dir)
     candidates = [Candidate(doc=d) for d in docs]
 

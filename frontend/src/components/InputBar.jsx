@@ -1,4 +1,3 @@
-import React from 'react';
 import { IoSend, IoReload } from 'react-icons/io5';
 
 const InputBar = ({ message, setMessage, handleSend, handleKeyDown, isLoading }) => {
@@ -20,6 +19,8 @@ const InputBar = ({ message, setMessage, handleSend, handleKeyDown, isLoading })
                     </div>
 
                     <button
+                        type="button"
+                        aria-label={isLoading ? 'Waiting for an answer' : 'Send question'}
                         onClick={handleSend}
                         disabled={isLoading || message.trim() === ''}
                         className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${

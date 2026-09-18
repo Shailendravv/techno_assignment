@@ -51,6 +51,12 @@ class AgentState(TypedDict, total=False):
     # bounds the cycle - which is the only thing stopping it running forever.
     rewrites: int
 
+    # Set when a stage failed soft rather than concluding - a grader that could
+    # not be reached, a model that would not return JSON. The answer is still
+    # returned, because degrading beats a 500, but it must not be cached: the
+    # cache has no TTL and would store an outage as though it were a verdict.
+    degraded: bool
+
     # Output, set by the finalize node
     answer: str
     cited_doc_ids: list[str]

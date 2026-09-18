@@ -1,5 +1,4 @@
-import React from 'react';
-import { IoPersonAddOutline, IoChevronDown } from 'react-icons/io5';
+
 
 const Header = () => {
   return (
@@ -13,8 +12,8 @@ const Header = () => {
             </svg>
           </div>
           <div>
-            <h1 className="font-bold text-[17px] text-gray-900 leading-tight">AI Assistant</h1>
-            <p className="text-[11px] text-gray-500 font-medium">Powered by Copilot</p>
+            <h1 className="font-bold text-[17px] text-gray-900 leading-tight">Runbook Agent</h1>
+            <p className="text-[11px] text-gray-500 font-medium">Grounded answers over 12 operational runbooks</p>
           </div>
         </div>
 

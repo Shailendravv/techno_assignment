@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from agent.config import Settings, settings as default_settings
+from agent.config import Settings, current_settings
 from agent.core.models import Candidate, Doc, QuerySpec
 from agent.core.retrieve import LexicalIndex
 
@@ -65,6 +65,41 @@ class Store(Protocol):
         """Enough to tell, from `/health`, whether this store is actually usable."""
 
 
+# Stores are memoised per configuration.
+#
+# `get_store()` used to construct a new one on every call, and it is called at
+# least twice per request - once in `analyze_node` for the vocabularies, once
+# in `retrieve_node` - plus once more per turn of the corrective loop. On the
+# file backend that is invisible, because `load_corpus` is itself cached. On
+# Supabase every instance re-fetched the whole corpus over HTTP.
+#
+# The correctness half matters more than the latency. `SupabaseStore` keeps
+# `self.divergences` - the record of the SQL pre-filter disagreeing with the
+# Python metadata filter, which is the designed safeguard against the two
+# implementations of this system's central rule drifting apart. With a fresh
+# instance per call, the one that recorded a divergence was discarded and
+# `/health` read a different object, so the safeguard could not fire. A safety
+# net that structurally cannot catch anything is worse than none, because it is
+# believed.
+_stores: dict[tuple, Store] = {}
+
+
+def _store_key(cfg: Settings) -> tuple:
+    """What actually distinguishes one store from another."""
+    return (
+        cfg.store,
+        cfg.corpus_dir,
+        cfg.supabase.url,
+        cfg.supabase.service_key,
+        cfg.embedding.signature,
+    )
+
+
+def reset_stores() -> None:
+    """Drop the memoised stores. For tests, and for a changed configuration."""
+    _stores.clear()
+
+
 def get_store(cfg: Settings | None = None) -> Store:
     """The store the active profile asks for.
 
@@ -72,22 +107,31 @@ def get_store(cfg: Settings | None = None) -> Store:
     credential should leave a working system reading the repository, not a 500
     from every request - the corpus is checked in, so files is always available.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
+
+    key = _store_key(cfg)
+    store = _stores.get(key)
+    if store is not None:
+        return store
 
     if cfg.store == "supabase":
         from agent.store.supabase_store import SupabaseStore
 
         if cfg.supabase.configured:
-            return SupabaseStore(cfg)
+            store = SupabaseStore(cfg)
 
-    from agent.store.file_store import FileStore
+    if store is None:
+        from agent.store.file_store import FileStore
 
-    return FileStore(cfg)
+        store = FileStore(cfg)
+
+    _stores[key] = store
+    return store
 
 
 def store_kind(cfg: Settings | None = None) -> str:
     """What is actually mounted, which may not be what was asked for."""
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     if cfg.store == "supabase" and not cfg.supabase.configured:
         return "files (supabase requested but not configured)"
     return cfg.store
@@ -100,5 +144,6 @@ __all__ = [
     "Store",
     "StoreUnavailable",
     "get_store",
+    "reset_stores",
     "store_kind",
 ]

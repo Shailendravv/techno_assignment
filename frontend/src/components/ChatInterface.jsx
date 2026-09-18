@@ -1,6 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { IoChevronUp } from 'react-icons/io5';
-import { MdOutlineContentCopy } from 'react-icons/md';
+import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Header from './Header';
@@ -36,6 +34,11 @@ const MARKDOWN_COMPONENTS = {
   ),
 };
 
+// `Date.now()` collides when two messages land in the same millisecond, and a
+// duplicate React key silently drops one of them from the list.
+const newId = () =>
+  (globalThis.crypto?.randomUUID?.() ?? `m-${Date.now()}-${Math.random()}`);
+
 const ChatInterface = () => {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
@@ -44,21 +47,27 @@ const ChatInterface = () => {
 
   // Mutation for asking the runbook agent a question
   const mutation = useMutation({
-    mutationFn: (question) => askQuestion(question),
+    // `explain: true` asks for the per-stage trace. It is the most
+    // interesting thing this system produces - for a declined question it
+    // is the only thing that says *why* - and the backend has always
+    // supported it. The UI simply never asked.
+    mutationFn: (question) => askQuestion(question, { explain: true }),
     onSuccess: (data) => {
       const aiResponse = {
-        id: Date.now() + 1,
+        id: newId(),
         sender: 'ai',
         text: data.answer,
         confidence: data.confidence,
         citedDocIds: data.cited_doc_ids || [],
+        trace: data.trace || [],
+        llmCalls: data.llm_calls,
         timestamp: 'Today'
       };
       setMessages((prev) => [...prev, aiResponse]);
     },
     onError: (error) => {
       const errorMessage = {
-        id: Date.now() + 1,
+        id: newId(),
         sender: 'ai',
         text: `Error: ${error.message}`,
         timestamp: 'Today'
@@ -79,13 +88,16 @@ const ChatInterface = () => {
     if (message.trim() === '') return;
 
     const newMessage = {
-      id: Date.now(),
+      id: newId(),
       text: message,
       sender: 'user',
       timestamp: 'Today',
     };
 
-    setMessages([...messages, newMessage]);
+    // Functional update, like `onSuccess` already uses. Reading `messages` from
+    // the render closure drops a message when two sends land before React has
+    // re-rendered.
+    setMessages((prev) => [...prev, newMessage]);
     mutation.mutate(message);
     setMessage('');
   };
@@ -112,7 +124,7 @@ const ChatInterface = () => {
             <div className="flex-grow border-t border-gray-200"></div>
           </div>
 
-          <div className="space-y-8">
+          <div className="space-y-8" role="log" aria-live="polite" aria-relevant="additions">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
                 {msg.sender === 'user' ? (
@@ -147,27 +159,26 @@ const ChatInterface = () => {
                       </div>
                     )}
 
-                    {msg.isCode && (
-                      <div className="relative group">
-                        <div className="bg-[#1a1a1a] rounded-xl overflow-hidden shadow-xl">
-                          <div className="flex items-center justify-between px-4 py-2 bg-[#2a2a2a] text-gray-300 text-xs">
-                            <div className="flex items-center gap-2">
-                              <span>{msg.codeTitle}</span>
-                              <IoChevronUp className="text-gray-500" />
-                            </div>
-                            <button className="flex items-center gap-1.5 hover:text-white transition-colors">
-                              <MdOutlineContentCopy />
-                              Copy
-                            </button>
-                          </div>
-                          <div className="p-5 font-mono text-[14px] text-gray-300 whitespace-pre bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a]">
-                            {msg.codeContent}
-                          </div>
-                        </div>
-
-
-                      </div>
+                    {msg.trace?.length > 0 && (
+                      <details className="group">
+                        <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 transition-colors select-none">
+                          Why this answer
+                          {typeof msg.llmCalls === 'number' && (
+                            <span className="ml-1.5 text-gray-300">
+                              · {msg.llmCalls} model {msg.llmCalls === 1 ? 'call' : 'calls'}
+                            </span>
+                          )}
+                        </summary>
+                        <ol className="mt-2 space-y-1 border-l-2 border-gray-200 pl-3">
+                          {msg.trace.map((line, i) => (
+                            <li key={i} className="text-xs text-gray-500 font-mono leading-relaxed break-words">
+                              {line}
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
                     )}
+
                   </div>
                 )}
               </div>

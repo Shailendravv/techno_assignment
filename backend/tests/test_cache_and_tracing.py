@@ -349,3 +349,245 @@ def test_masking_leaves_an_ordinary_question_alone():
     question = "What is the rollback procedure for payments-api?"
 
     assert observability.mask(data=question) == question
+
+
+# ---------------------------------------------------------------------------
+# Failure handling and cache integrity.
+#
+# The answer cache has no TTL. That is a deliberate choice - an answer goes
+# stale when the runbook changes, not on a schedule - but it makes *what* gets
+# written the whole safety question, and two things were wrong: a degraded run
+# was cached as though it were a verdict, and the corpus-version invalidation
+# the schema documents was never wired up at either end.
+# ---------------------------------------------------------------------------
+
+class _Recorder:
+    """A cache that records rather than stores."""
+
+    enabled = True
+
+    def __init__(self):
+        self.written: list[tuple[str, dict]] = []
+
+    def get(self, question):
+        return None
+
+    def put(self, question, result):
+        self.written.append((question, result))
+
+
+def test_a_degraded_run_is_not_written_to_the_cache(monkeypatch):
+    """A `no_match` from a broken model looks exactly like a considered one.
+
+    The difference is invisible in the result and permanent in the cache, so it
+    has to be decided before the write, not after.
+    """
+    from agent.api import answer_question
+    from agent.config import load_settings
+    from agent.llm import LLMBadJSON
+
+    recorder = _Recorder()
+    monkeypatch.setattr("agent.cache.get_cache", lambda cfg=None: recorder)
+
+    def _will_not_parse(*args, **kwargs):
+        raise LLMBadJSON("model returned prose")
+
+    monkeypatch.setattr("agent.nodes.ground.chat_json", _will_not_parse)
+
+    result = answer_question(
+        "checkout-api is running hot on CPU", cfg=load_settings("local")
+    )
+
+    assert result["confidence"] == "no_match"
+    assert recorder.written == [], "an outage was cached as a verdict"
+
+
+def test_a_concluded_run_is_written_to_the_cache(monkeypatch):
+    """The other half: the fix must not stop caching real results."""
+    from agent.api import answer_question
+    from agent.config import load_settings
+
+    recorder = _Recorder()
+    monkeypatch.setattr("agent.cache.get_cache", lambda cfg=None: recorder)
+    monkeypatch.setattr(
+        "agent.nodes.ground.chat_json",
+        lambda *a, **k: ({"answer": "Check the deploy log.", "cited_doc_ids": ["RB-001"]}, 1),
+    )
+
+    answer_question("checkout-api is running hot on CPU", cfg=load_settings("local"))
+
+    assert len(recorder.written) == 1
+
+
+def test_the_cache_reads_and_writes_the_corpus_version(monkeypatch):
+    """`0003_cache_and_jobs.sql` says a re-ingest invalidates every cached
+    answer. It did not: `put()` never wrote the column so every row defaulted to
+    1, and `get()` never filtered on it. Against the live database the corpus
+    was at version 2 and version-1 answers were still being served."""
+    from agent.cache import SupabaseCache
+    from agent.config import Supabase, load_settings
+
+    cfg = replace(
+        load_settings("dev"),
+        supabase=Supabase(url="https://example.supabase.co", service_key="k"),
+    )
+    cache = SupabaseCache(cfg)
+
+    requests: list[tuple[str, dict | None]] = []
+
+    def _fake(path, payload=None, method="POST"):
+        requests.append((path, payload))
+        if "corpus_meta" in path:
+            return [{"corpus_version": 7}]
+        return []
+
+    monkeypatch.setattr(cache.store, "_request", _fake)
+
+    cache.get("how do I roll back checkout-api")
+    cache.put("how do I roll back checkout-api", {"answer": "a", "cited_doc_ids": [], "confidence": "low"})
+
+    lookup = next(p for p, _ in requests if "answer_cache?question_key" in p and "select" in p)
+    assert "corpus_version=eq.7" in lookup
+
+    written = next(pl for p, pl in requests if p.startswith("/rest/v1/answer_cache?on_conflict"))
+    assert written[0]["corpus_version"] == 7
+
+
+def test_the_store_is_reused_within_a_configuration():
+    """`get_store()` built a new one per call - twice per request, plus once per
+    turn of the corrective loop. On Supabase each instance re-fetched the whole
+    corpus, and `SupabaseStore.divergences` - the record of the SQL pre-filter
+    disagreeing with the Python metadata filter - was discarded before anything
+    could read it."""
+    from agent.config import load_settings
+    from agent.store import get_store, reset_stores
+
+    reset_stores()
+    cfg = load_settings("local")
+
+    assert get_store(cfg) is get_store(cfg)
+
+
+def test_a_different_configuration_gets_a_different_store():
+    from agent.config import load_settings
+    from agent.store import get_store, reset_stores
+
+    reset_stores()
+    cfg = load_settings("local")
+
+    assert get_store(cfg) is not get_store(replace(cfg, corpus_dir="elsewhere"))
+
+
+# ---------------------------------------------------------------------------
+# Expiry.
+#
+# The third invalidation mechanism, and the only one that needs no discipline.
+# `corpus_version` catches a re-ingest and `cache_key` catches a changed model,
+# mode or `_CACHE_VERSION` - but nothing caught a behaviour change that nobody
+# remembered to version, and one of those cached a wrong citation for Q13 of
+# the evaluation set. A TTL bounds how long that class of mistake survives.
+# ---------------------------------------------------------------------------
+
+def _recording_cache(cfg):
+    """A `SupabaseCache` whose HTTP layer records instead of calling out."""
+    from agent.cache import SupabaseCache
+
+    cache = SupabaseCache(cfg)
+    requests: list[tuple[str, dict | None]] = []
+
+    def _fake(path, payload=None, method="POST"):
+        requests.append((path, payload))
+        if "corpus_meta" in path:
+            return [{"corpus_version": 1}]
+        return []
+
+    cache.store._request = _fake
+    return cache, requests
+
+
+def _cached_cfg(**overrides):
+    from agent.config import Supabase, load_settings
+
+    return replace(
+        load_settings("dev"),
+        supabase=Supabase(url="https://example.supabase.co", service_key="k"),
+        **overrides,
+    )
+
+
+def test_a_lookup_will_not_accept_an_answer_older_than_the_ttl():
+    cache, requests = _recording_cache(_cached_cfg(answer_cache_ttl_s=60))
+
+    cache.get("how do I roll back checkout-api")
+
+    lookup = next(p for p, _ in requests if "answer_cache?question_key" in p)
+    assert "created_at=gte." in lookup, "no freshness bound was applied"
+
+
+def test_the_ttl_bound_is_actually_one_ttl_ago():
+    from datetime import datetime, timedelta, timezone
+    from urllib.parse import unquote
+
+    cache, requests = _recording_cache(_cached_cfg(answer_cache_ttl_s=60))
+    before = datetime.now(timezone.utc)
+    cache.get("how do I roll back checkout-api")
+
+    lookup = next(p for p, _ in requests if "answer_cache?question_key" in p)
+    raw = unquote(lookup.split("created_at=gte.")[1].split("&")[0])
+    cutoff = datetime.fromisoformat(raw)
+
+    # Within a second either side of "sixty seconds ago".
+    assert abs((before - timedelta(seconds=60)) - cutoff) < timedelta(seconds=2)
+
+
+def test_expiry_can_be_switched_off():
+    """0 means keep answers until something else invalidates them.
+
+    Worth keeping: the two version mechanisms are exact, and a deployment that
+    trusts them should not have to pay for repeated model calls as well.
+    """
+    cache, requests = _recording_cache(_cached_cfg(answer_cache_ttl_s=0))
+
+    cache.get("how do I roll back checkout-api")
+
+    lookup = next(p for p, _ in requests if "answer_cache?question_key" in p)
+    assert "created_at" not in lookup
+
+
+def test_a_refreshed_answer_resets_its_own_age():
+    """The trap in putting a TTL on an upsert.
+
+    `put()` writes with `on_conflict=question_key`, and PostgREST updates only
+    the columns supplied. Omit `created_at` and a refreshed answer keeps the
+    timestamp of the one it replaced - so it is already older than the TTL, and
+    that question can never be served from the cache again. The TTL would look
+    like it worked while quietly disabling the cache outright.
+    """
+    cache, requests = _recording_cache(_cached_cfg(answer_cache_ttl_s=60))
+
+    cache.put("q", {"answer": "a", "cited_doc_ids": [], "confidence": "low"})
+
+    payload = next(p for path, p in requests if "on_conflict" in path)
+    assert payload[0]["created_at"] == "now()"
+
+
+def test_the_cache_version_is_part_of_the_key():
+    """Bumping `_CACHE_VERSION` must strand every prior row.
+
+    This is the purge that needs no database write, and it is what retired the
+    answers cached before the grader excerpt was fixed.
+    """
+    import agent.cache as cache_module
+    from agent.cache import cache_key
+
+    cfg = _cached_cfg()
+    before = cache_key("how do I roll back checkout-api", cfg)
+
+    original = cache_module._CACHE_VERSION
+    try:
+        cache_module._CACHE_VERSION = original + 1
+        after = cache_key("how do I roll back checkout-api", cfg)
+    finally:
+        cache_module._CACHE_VERSION = original
+
+    assert before != after

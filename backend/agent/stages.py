@@ -454,9 +454,9 @@ def using_recorder(recorder: StageRecorder) -> Iterator[StageRecorder]:
 def new_recorder(lifecycle: str, cfg=None, **fields) -> StageRecorder:
     """A recorder configured from settings - `STAGE_LOG` decides if it writes."""
     try:
-        from agent.config import settings as default_settings
+        from agent.config import current_settings
 
-        cfg = cfg or default_settings
+        cfg = cfg or current_settings()
         enabled = bool(getattr(cfg, "stage_log", True))
     except Exception:  # noqa: BLE001 - never block a run on configuration
         enabled = True

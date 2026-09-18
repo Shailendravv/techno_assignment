@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+from dataclasses import replace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -87,18 +89,66 @@ def test_health_never_500s_even_when_the_store_is_broken(client, monkeypatch):
 # /ingest/sign
 # --------------------------------------------------------------------------
 
-def test_signing_without_cloudinary_configured_is_a_503_not_a_500(client):
-    """Missing configuration is not a bug, and the message should say what to set."""
+INGEST_KEY = "test-ingest-secret"
+
+
+@pytest.fixture
+def ingest_enabled(monkeypatch):
+    """Configure signed uploads, and hand back the key a caller needs.
+
+    The route is off unless both a shared secret and Cloudinary are configured,
+    so a test that wants to exercise it has to say so - which is the point.
+    """
+    from agent.config import Cloudinary, current_settings
+
+    cfg = current_settings()
+    monkeypatch.setattr(
+        "agent.config.settings",
+        replace(
+            cfg,
+            ingest_api_key=INGEST_KEY,
+            cloudinary=Cloudinary(
+                cloud_name="demo", api_key="123", api_secret="shhh"
+            ),
+        ),
+    )
+    return {"X-Ingest-Key": INGEST_KEY}
+
+
+def test_signing_is_not_available_without_a_key(client):
+    """An unauthenticated caller must not be able to mint an upload signature.
+
+    404 rather than 401 or 403: an unconfigured deployment should not advertise
+    that this route exists. This is the finding that mattered most about this
+    endpoint - it used to hand anyone a valid Cloudinary signature, and the
+    ingestion pipeline turns whatever is uploaded into corpus documents that a
+    model is then asked to answer from.
+    """
     response = client.post("/ingest/sign", json={})
 
-    if response.status_code == 503:
-        assert "CLOUDINARY" in response.json()["detail"]
-    else:
-        # Cloudinary is configured in this environment; then it must succeed.
-        assert response.status_code == 200
+    assert response.status_code == 404
 
 
-def test_a_signed_response_never_carries_the_api_secret(client, monkeypatch):
+def test_signing_with_the_wrong_key_is_also_a_404(client, ingest_enabled):
+    response = client.post(
+        "/ingest/sign", json={}, headers={"X-Ingest-Key": "not-the-key"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_a_public_id_may_not_name_an_existing_document(client, ingest_enabled):
+    """`on_conflict=doc_id` means naming a runbook is overwriting it."""
+    response = client.post(
+        "/ingest/sign", json={"public_id": "RB-001"}, headers=ingest_enabled
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_signed_response_never_carries_the_api_secret(
+    client, monkeypatch, ingest_enabled
+):
     monkeypatch.setattr(
         "ingest.cloudinary_client.build_upload_signature",
         lambda *a, **k: {
@@ -113,7 +163,11 @@ def test_a_signed_response_never_carries_the_api_secret(client, monkeypatch):
         },
     )
 
-    body = client.post("/ingest/sign", json={"public_id": "RB-013"}).json()
+    body = client.post(
+        "/ingest/sign",
+        json={"public_id": "upload-abc12345"},
+        headers=ingest_enabled,
+    ).json()
 
     assert "api_secret" not in body
     assert body["resource_type"] == "raw"
@@ -149,3 +203,154 @@ def test_the_root_serves_the_ui_or_points_at_the_docs(client):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(("text/html", "application/json"))
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting.
+#
+# `/ask` takes no credential and every request that clears the gate spends Groq
+# tokens from a shared free-tier quota, so an unlimited endpoint is a
+# quota-exhaustion button. In-process and per-instance, which is stated in
+# `app/ratelimit.py` rather than implied.
+# ---------------------------------------------------------------------------
+
+def test_the_limiter_counts_a_window_and_then_refuses():
+    from app.ratelimit import RateLimiter
+
+    limiter = RateLimiter(per_minute=3)
+
+    verdicts = [limiter.check("1.2.3.4")[0] for _ in range(4)]
+
+    assert verdicts == [True, True, True, False]
+
+
+def test_clients_are_counted_separately():
+    from app.ratelimit import RateLimiter
+
+    limiter = RateLimiter(per_minute=1)
+    limiter.check("1.2.3.4")
+
+    allowed, _ = limiter.check("5.6.7.8")
+
+    assert allowed is True
+
+
+def test_the_window_reopens(monkeypatch):
+    from app.ratelimit import RateLimiter
+
+    limiter = RateLimiter(per_minute=1, window_s=60.0)
+    assert limiter.check("1.2.3.4", now=0.0)[0] is True
+    assert limiter.check("1.2.3.4", now=30.0)[0] is False
+
+    assert limiter.check("1.2.3.4", now=61.0)[0] is True
+
+
+def test_a_zero_limit_disables_the_check():
+    """So a deployment can turn it off without deleting the code path."""
+    from app.ratelimit import RateLimiter
+
+    limiter = RateLimiter(per_minute=0)
+
+    assert all(limiter.check("1.2.3.4")[0] for _ in range(50))
+
+
+def test_an_over_limit_request_gets_a_429_with_retry_after(client, monkeypatch):
+    from app.ratelimit import RateLimiter
+
+    monkeypatch.setattr("app.main._ask_limiter", RateLimiter(per_minute=1))
+
+    first = client.post("/ask", json={"question": "checkout-api high CPU"})
+    second = client.post("/ask", json={"question": "checkout-api high CPU"})
+
+    assert first.status_code in (200, 503)  # 503 when no GROQ key; either counts
+    assert second.status_code == 429
+    assert int(second.headers["Retry-After"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Failure responses.
+#
+# There were no exception handlers at all, so everything except LLMUnavailable
+# became a bare `500 Internal Server Error` with no body and no log line. Both
+# of this stack's most likely production failures landed there: Supabase
+# refusing a connection, and Groq still returning 429 after the retry budget.
+# ---------------------------------------------------------------------------
+
+def test_an_unreachable_store_is_a_503_with_an_incident_id(client, monkeypatch):
+    import agent.graph
+    from agent.store import StoreUnavailable
+
+    class Unreachable:
+        name = "broken"
+
+        def documents(self):
+            raise StoreUnavailable("Supabase returned 500 for /rest/v1/documents")
+
+        def lexical_index(self):
+            raise StoreUnavailable("down")
+
+        def retrieve(self, *a, **k):
+            raise StoreUnavailable("down")
+
+        def health(self):
+            return {"reachable": False, "error": "down"}
+
+    monkeypatch.setattr(agent.graph, "get_store", lambda cfg=None: Unreachable())
+
+    response = client.post("/ask", json={"question": "checkout-api high CPU"})
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"]
+    assert response.json()["incident"]
+
+
+def test_a_failure_does_not_leak_the_upstream_error(client, monkeypatch):
+    """The message can carry a Supabase URL or a fragment of a provider
+    response, so the caller gets a correlation id and the detail goes to the
+    log."""
+    import agent.graph
+    from agent.store import StoreUnavailable
+
+    secret_ish = "https://verysecret.supabase.co/rest/v1/documents"
+
+    class Unreachable:
+        name = "broken"
+
+        def documents(self):
+            raise StoreUnavailable(secret_ish)
+
+        def lexical_index(self):
+            raise StoreUnavailable(secret_ish)
+
+        def retrieve(self, *a, **k):
+            raise StoreUnavailable(secret_ish)
+
+        def health(self):
+            return {"reachable": False, "error": "down"}
+
+    monkeypatch.setattr(agent.graph, "get_store", lambda cfg=None: Unreachable())
+
+    response = client.post("/ask", json={"question": "checkout-api high CPU"})
+
+    assert secret_ish not in response.text
+
+
+def test_an_exhausted_rate_limit_is_a_503_not_a_500(client, monkeypatch):
+    """Groq's free tier still 429s after the retry budget is spent. That is a
+    dependency being busy, not a bug in the request."""
+    import agent.graph
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    def _rate_limited(*a, **k):
+        raise RateLimitError("rate limit exceeded")
+
+    monkeypatch.setattr("agent.nodes.ground.chat_json", _rate_limited)
+
+    response = client.post(
+        "/ask", json={"question": "checkout-api is running hot on CPU"}
+    )
+
+    assert response.status_code == 503
+    assert "rate limited" in response.json()["detail"].lower()

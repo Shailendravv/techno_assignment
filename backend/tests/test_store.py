@@ -24,7 +24,6 @@ The SQL is therefore covered two other ways:
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -279,9 +278,40 @@ class TestMigrationsMatchThePythonRules:
 
     @pytest.fixture(scope="class")
     def search_sql(self):
-        """Lowercased and whitespace-collapsed, so alignment is not load-bearing."""
-        raw = (MIGRATIONS / "0002_hybrid_search.sql").read_text(encoding="utf-8")
+        """The migration that *currently* defines `hybrid_search`.
+
+        Resolved by number rather than named, because these assertions guard the
+        definition the database actually runs. Pinning them to `0002` meant that
+        the moment `0004` redefined the function, the tests carried on passing
+        while guarding a superseded file - which is the failure mode they exist
+        to prevent, reproduced in the tests themselves.
+        """
+        defining = sorted(
+            path
+            for path in MIGRATIONS.glob("*.sql")
+            if "create or replace function hybrid_search"
+            in path.read_text(encoding="utf-8").lower()
+        )
+        assert defining, "no migration defines hybrid_search"
+        raw = defining[-1].read_text(encoding="utf-8")
         return " ".join(raw.lower().split())
+
+    def test_the_lexical_query_is_disjunctive(self, search_sql):
+        """The regression that made the deployed lexical arm return nothing.
+
+        `websearch_to_tsquery` alone builds an AND of every content word, so a
+        natural-language question matched no document and `ts_rank_cd` returned
+        0.0 for all twelve - against a floor calibrated on BM25, which scores
+        partial matches. Reverting to a bare conjunctive query would silently
+        restore that.
+        """
+        assert "or_tsquery" in search_sql
+
+    def test_documents_that_do_not_match_contribute_no_rank(self, search_sql):
+        """Without this the CTE emitted every document ranked by doc_id after an
+        all-zero sort, feeding alphabetical order into RRF as though it were a
+        ranking signal."""
+        assert "a.fts @@ q.tsq" in search_sql
 
     def test_a_general_document_is_never_dropped_for_its_service(self, search_sql):
         assert "d.service is null or d.service = p_service" in search_sql
@@ -334,24 +364,67 @@ class TestMigrationsMatchThePythonRules:
 # a pass. This is the Phase 6 exit criterion.
 # --------------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    not os.getenv("SUPABASE_URL"),
-    reason="needs a live Supabase project; set SUPABASE_URL and SUPABASE_SERVICE_KEY",
-)
-def test_supabase_scores_identically_to_files():
+@pytest.mark.network
+def test_supabase_does_not_rank_worse_than_files_on_the_lexical_arm(live_dev_config):
     """Behaviour preservation is the only thing that makes the migration safe.
 
-    Both stores go through the same filter and the same gate, so any difference
-    is a difference in *ranking* - which is exactly what moving from rank_bm25
-    to ts_rank_cd risks, since the two are not comparable scorers.
+    This is the Phase 6 exit criterion. Both stores go through the same filter
+    and the same gate, so any difference is a difference in *ranking* - which is
+    exactly what moving from `rank_bm25` to `ts_rank_cd` risks, since the two
+    are not comparable scorers.
+
+    **Run on the lexical arm deliberately.** The two profiles use different
+    embedders - bge-small at 384 dimensions locally, Gemini at 768 deployed - so
+    a hybrid comparison would vary the dense arm and the lexical arm at once and
+    could not attribute a difference to either. Holding the embedder out makes
+    this a controlled test of the one question that matters: does Postgres rank
+    like BM25?
+
+    **Asserted as "no worse", not as "identical", and that is deliberate.** An
+    equality assertion sounds stricter and is actually the wrong shape: BM25 and
+    `ts_rank_cd` are different algorithms and will never agree question for
+    question, so equality would either fail forever or force the better backend
+    down to the worse one. What must hold is that the swap costs nothing:
+
+      1. every document the file backend retrieves is still retrieved, and
+      2. the refusal behaviour is preserved exactly - which is the property this
+         whole system exists to provide, and the one a more eager retriever
+         would quietly destroy.
+
+    Postgres currently does better than BM25 on Q14, the vocabulary-mismatch
+    question written in Phase 1 to probe exactly this. That is allowed to
+    improve; it is not allowed to regress.
+
+    Two earlier versions of this test were wrong in ways worth recording. It
+    built *both* arms from the `local` profile and then flipped `store`, so it
+    sent a 384-dimension vector at a `vector(768)` column and Postgres answered
+    `different vector dimensions 768 and 384`. And it was keyed on
+    `SUPABASE_URL` being set rather than marked, so it ran by accident on any
+    machine with a configured `.env` - and passed, because with the credentials
+    cleared both arms silently fell back to `FileStore` and it compared the file
+    backend against itself.
     """
     from eval.questions import ALL_QUESTIONS
     from eval.retrieval_eval import run_retrieval
 
-    files = replace(load_settings("local"), store="files")
-    supabase = replace(load_settings("local"), store="supabase")
+    lexical = replace(live_dev_config.retrieval, mode="lexical")
+    files = replace(live_dev_config, store="files", retrieval=lexical)
+    supabase = replace(live_dev_config, store="supabase", retrieval=lexical)
 
     file_results, _ = run_retrieval(ALL_QUESTIONS, files)
     supabase_results, _ = run_retrieval(ALL_QUESTIONS, supabase)
 
-    assert [r.outcome for r in file_results] == [r.outcome for r in supabase_results]
+    regressions = [
+        (f.id, f.outcome, s.outcome)
+        for f, s in zip(file_results, supabase_results)
+        if f.outcome == "RETRIEVED" and s.outcome != "RETRIEVED"
+    ]
+    assert not regressions, f"Postgres lost documents the file backend found: {regressions}"
+
+    # The refusal half, which must match exactly. A backend that admits an
+    # unanswerable question the other stopped has traded away the behaviour the
+    # brief scores most heavily.
+    refusals = lambda results: [
+        (r.id, r.outcome) for r in results if r.outcome in ("STOPPED", "ADMITTED")
+    ]
+    assert refusals(file_results) == refusals(supabase_results)

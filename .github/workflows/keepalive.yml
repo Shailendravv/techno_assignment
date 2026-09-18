@@ -57,3 +57,30 @@ jobs:
             echo "::error::The off-topic question was not declined. The gate has regressed."
             exit 1
           }
+
+      - name: Run one question that must be ANSWERED
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then exit 0; fi
+
+          # The half this workflow was missing, and it is the half that would
+          # have caught the worst bug this system has had.
+          #
+          # Asserting only that an off-topic question is declined means a system
+          # that declines *everything* passes. That is exactly what the deployed
+          # configuration was doing: `websearch_to_tsquery` is conjunctive, so
+          # ts_rank_cd returned 0.0 for every real question, the lexical floor
+          # could never be met, and answerable questions were refused - while
+          # this cron stayed green and the harness, which runs the file backend,
+          # reported 100%.
+          #
+          # A refusal test and an answer test together bound the behaviour from
+          # both sides. Neither does it alone.
+          answer=$(curl -sS --max-time 120 -X POST "$APP_URL/ask"             -H 'content-type: application/json'             -d '{"question":"checkout-api is running hot on CPU - what should I check first?"}')
+          echo "$answer"
+
+          echo "$answer" | grep -q '"cited_doc_ids":\["RB-001"' || {
+            echo "::error::An answerable question was not answered from RB-001. Retrieval or the gate has regressed."
+            exit 1
+          }

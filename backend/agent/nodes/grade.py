@@ -35,8 +35,11 @@ questions. `GRADER_ENABLED` is false in `config/local.json` and true in
 
 from __future__ import annotations
 
-from agent.config import Settings, settings as default_settings
+import re
+
+from agent.config import Settings, current_settings
 from agent.core.models import Candidate
+from agent.core.retrieve import content_terms
 from agent.llm import LLMBadJSON, LLMUnavailable, chat_json
 
 GRADER_PROMPT = """\
@@ -86,25 +89,87 @@ Reply with a JSON object and nothing else:
 """
 
 
-def _format_for_grading(candidates: list[Candidate], max_chars: int = 900) -> str:
+def _sections(text: str) -> list[str]:
+    """Split a document at its markdown section headings, keeping each heading.
+
+    Element 0 is whatever precedes the first `##` - the title and the opening
+    paragraph - which is why it is always kept below.
+    """
+    parts = (part.strip() for part in re.split(r"\n(?=#{2,3} )", text))
+    return [part for part in parts if part]
+
+
+def _relevance(section: str, terms: list[str]) -> int:
+    """How many distinct question terms this section mentions.
+
+    Distinct rather than total, so a section that repeats one word does not
+    outrank one that covers several.
+    """
+    lowered = section.lower()
+    return sum(1 for term in set(terms) if term in lowered)
+
+
+def _excerpt(doc_text: str, terms: list[str], head_chars: int, extra_chars: int) -> str:
+    """The opening, plus the section that best answers *this* question.
+
+    This function exists because of a wrong citation, and the shape of that bug
+    is worth keeping written down. The grader used to be shown `doc.text[:900]`.
+    That is a sound economy for a runbook, whose subject is its first paragraph,
+    and wrong for a policy document that covers six topics in sequence.
+
+    Q13 asks what expand-and-contract is. RB-010 defines it - "always in two
+    separate releases" - 1258 characters in, under `## Database migrations`, so
+    the grader was handed a copy of RB-010 that never mentions the term. RB-005,
+    a rollback runbook, happens to mention it at character 800, inside the
+    window. The grader kept RB-005 and dropped RB-010, and it was right to, on
+    the evidence it was given. The truncation was what was wrong.
+
+    So: keep the opening, and if the question is answered somewhere further
+    down, show that part too. Still bounded - a grader that reads whole
+    documents costs more than the grounding call it is supposed to protect.
+    """
+    head = doc_text[:head_chars]
+    if len(doc_text) <= head_chars or not terms:
+        return head if len(doc_text) <= head_chars else head + "\n[...truncated]"
+
+    # Only sections that begin past the head are candidates; anything inside it
+    # has already been shown.
+    tail = doc_text[head_chars:]
+    best = max(_sections(tail), key=lambda s: _relevance(s, terms), default="")
+
+    if not best or _relevance(best, terms) == 0:
+        return head + "\n[...truncated]"
+
+    excerpt = best[:extra_chars]
+    if len(best) > extra_chars:
+        excerpt += "\n[...truncated]"
+    return f"{head}\n[...]\n{excerpt}"
+
+
+def _format_for_grading(
+    candidates: list[Candidate],
+    question: str = "",
+    head_chars: int = 600,
+    extra_chars: int = 700,
+) -> str:
     """Show the grader enough to judge, and no more.
 
-    Truncated deliberately: relevance is decided by the title, the metadata and
-    the opening of a document, and sending four full runbooks to a grader would
-    cost more tokens than the grounding call it is supposed to protect.
+    Bounded deliberately: sending four full runbooks to a grader would cost more
+    tokens than the grounding call it is supposed to protect. What is *shown*
+    within that budget is chosen by the question rather than by byte offset -
+    see `_excerpt`.
     """
+    terms = content_terms(question) if question else []
     blocks = []
     for candidate in candidates:
         doc = candidate.doc
-        body = doc.text[:max_chars]
-        if len(doc.text) > max_chars:
-            body += "\n[...truncated]"
         blocks.append(
             f"--- {doc.doc_id} ---\n"
             f"Title: {doc.title}\n"
             f"service: {doc.service or 'applies to all services'}; "
             f"failure mode: {doc.failure_mode or 'not specific to one'}; "
-            f"type: {doc.doc_type}\n\n{body}"
+            f"type: {doc.doc_type}\n\n"
+            f"{_excerpt(doc.text, terms, head_chars, extra_chars)}"
         )
     return "\n\n".join(blocks)
 
@@ -113,10 +178,14 @@ def grade_candidates(
     question: str,
     candidates: list[Candidate],
     cfg: Settings | None = None,
-) -> tuple[list[Candidate], str, int]:
+) -> tuple[list[Candidate], str, int, bool]:
     """Keep only the candidates the grader judges relevant.
 
-    Returns (kept, reason, llm_calls).
+    Returns (kept, reason, llm_calls, degraded). The last element matters
+    because failing open is invisible in the result: the candidates pass
+    through unchanged and the answer looks ordinary. The answer cache needs to
+    know, since it has no TTL and would otherwise store an ungraded answer as
+    though the grader had approved it.
 
     Degrades towards *keeping* things. If the grader is unavailable or returns
     nonsense, we pass the candidates through untouched rather than dropping
@@ -125,10 +194,10 @@ def grade_candidates(
     grounding step can still refuse; failing closed would silently turn every
     answerable question into `no_match` the moment the grader had a bad day.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
 
     if not candidates:
-        return [], "nothing to grade", 0
+        return [], "nothing to grade", 0, False
 
     messages = [
         {"role": "system", "content": GRADER_PROMPT},
@@ -136,7 +205,7 @@ def grade_candidates(
             "role": "user",
             "content": (
                 f"Question: {question}\n\n"
-                f"{_format_for_grading(candidates)}"
+                f"{_format_for_grading(candidates, question)}"
             ),
         },
     ]
@@ -144,7 +213,7 @@ def grade_candidates(
     try:
         parsed, calls = chat_json(messages, role="grader", cfg=cfg, max_tokens=300)
     except (LLMUnavailable, LLMBadJSON):
-        return candidates, "grader unavailable - candidates passed through", 0
+        return candidates, "grader unavailable - candidates passed through", 0, True
 
     relevant = parsed.get("relevant") or []
     if isinstance(relevant, str):
@@ -161,7 +230,7 @@ def grade_candidates(
         if candidate.doc_id not in keep:
             candidate.drop(f"grader: not relevant ({reason or 'no reason given'})")
 
-    return kept, reason or f"{len(kept)}/{len(candidates)} judged relevant", calls
+    return kept, reason or f"{len(kept)}/{len(candidates)} judged relevant", calls, False
 
 
 def rewrite_query(
@@ -174,7 +243,7 @@ def rewrite_query(
     back unchanged, so a broken rewrite costs one retrieval attempt rather than
     the answer.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
 
     messages = [
         {"role": "system", "content": REWRITE_PROMPT},

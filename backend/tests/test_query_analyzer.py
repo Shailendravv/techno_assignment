@@ -191,3 +191,79 @@ def test_the_analyzer_is_deterministic(docs):
     """Rule-based on purpose: same input, same output, no network, no cost."""
     question = "checkout-api is running hot on CPU - what should I check first?"
     assert analyze_query(question, docs) == analyze_query(question, docs)
+
+
+# ---------------------------------------------------------------------------
+# Substring matching, and why it was expensive.
+#
+# The analyser used `synonym in text` and rewrote `<word> api` to `<word>-api`
+# unconditionally. Both read the middle of unrelated words. That would be a
+# minor precision issue in a system that *scored* metadata - but this one
+# treats a metadata mismatch as a contradiction and hard-drops the document, and
+# an unknown service short-circuits the gate to no_match before any model runs.
+# So a false positive here does not weaken an answer, it deletes it.
+# ---------------------------------------------------------------------------
+
+class TestSynonymsMatchWholeWordsOnly:
+    def test_parameters_does_not_contain_a_memory_problem(self, docs):
+        """pa[ram]eters -> "ram" -> failure_mode=memory.
+
+        This dropped RB-001, RB-002 and RB-012 as "failure mode mismatch" on a
+        question about checkout-api - including the CPU runbook it was asking
+        about.
+        """
+        spec = analyze_query("What are the deploy parameters for checkout-api?", docs)
+
+        assert spec.failure_mode is None
+        assert spec.service == "checkout-api"
+
+    def test_a_feature_flag_is_not_sync_lag(self, docs):
+        """f[lag] -> "lag" -> failure_mode=sync_lag."""
+        spec = analyze_query("The feature flag rollout is broken, what do I do?", docs)
+
+        assert spec.failure_mode is None
+
+    def test_the_real_synonyms_still_match(self, docs):
+        """The fix must not buy precision by losing the recall it was built for."""
+        assert analyze_query("checkout-api is running hot on CPU", docs).failure_mode == "cpu"
+        assert analyze_query("the connection pool is exhausted", docs).failure_mode == "connections"
+        assert analyze_query("exit code 137 on inventory-api", docs).failure_mode == "memory"
+        assert analyze_query("stock sync is lagging behind", docs).failure_mode == "sync_lag"
+
+
+class TestDeterminersAreNotServiceNames:
+    def test_which_api_is_not_a_service_we_do_not_cover(self, docs):
+        """The worst false positive available to this system.
+
+        "Which API should I check first?" normalised to `which-api`, which no
+        document covers, so `unknown_service` refused the question outright -
+        zero model calls, no recovery. Verified end to end through the UI before
+        the fix: the corpus holds three CPU runbooks and this was declined.
+        """
+        spec = analyze_query("Which API should I check first for high CPU?", docs)
+
+        assert spec.unknown_service is None
+        assert spec.failure_mode == "cpu"
+
+    def test_an_article_is_not_a_service_either(self, docs):
+        assert analyze_query("Is there an api for incidents?", docs).unknown_service is None
+
+    def test_a_real_undocumented_service_is_still_refused(self, docs):
+        """The behaviour being protected while the false positives are removed.
+
+        A question naming a service-shaped thing we have no runbook for is
+        positive evidence that we cannot answer, and should still short-circuit.
+        """
+        assert analyze_query("How do I restart the search-api?", docs).unknown_service == "search-api"
+        assert (
+            analyze_query("recommendation-engine is down", docs).unknown_service
+            == "recommendation-engine"
+        )
+
+    def test_the_documented_spellings_all_still_resolve(self, docs):
+        for question in (
+            "checkout api is running hot",
+            "the checkout service is slow",
+            "How do I roll back checkout-api?",
+        ):
+            assert analyze_query(question, docs).service == "checkout-api", question

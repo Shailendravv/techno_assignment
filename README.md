@@ -109,12 +109,21 @@ curl -X POST localhost:8000/ask -H 'content-type: application/json' \
 entire test suite run offline:
 
 ```bash
-pytest -q                       # 260 tests, no network, no key
+pytest -q                       # 329 tests, no network, no key
 
 # Gate calibration, and the lexical-vs-hybrid measurement. Both retrieval-only:
 # free, deterministic, reproducible.
 python -m eval.harness --sweep
 python -m eval.harness --retrieval-only --compare lexical,hybrid
+```
+
+The browser suite splits the same way. From `frontend/`:
+
+```bash
+npm run test:e2e        # 18 tests, real browser, POST /ask stubbed. No backend,
+                        # no key. This is what CI runs.
+npm run test:e2e:live   # 3 tests through the real pipeline. Needs the API
+                        # running, and spends Groq quota.
 ```
 
 ### Configuration
@@ -252,13 +261,15 @@ agent/
 
 config/             local.json, dev.json - committed, no secrets
 app/                FastAPI surface (thin by design)
-web/                single-page UI
 ingest/             offline pipeline: Cloudinary -> parse -> chunk -> embed -> Supabase
 supabase/migrations single-query hybrid search, in SQL
 baseline/           the no-retrieval control arm
 eval/               questions, harness, scorer, retrieval-only scorer
 runbooks/           RB-001.md .. RB-012.md
-tests/              260 tests, all offline
+tests/              329 tests, all offline
+
+../frontend/        React + Vite single-page UI
+../frontend/e2e/    Playwright: 18 hermetic, 3 @live
 ```
 
 `agent/core/` imports nothing heavy on purpose. That is what keeps the test
@@ -347,9 +358,22 @@ a test pins the overlap so the finding is not quietly forgotten.
 
 ### End-to-end scores
 
-Run 2026-09-18, `--arm hybrid`, generation by Groq `openai/gpt-oss-120b`.
-Committed verbatim as [`harness_output.json`](backend/harness_output.json) — the
-file the harness wrote, not a transcription of it.
+Run 2026-09-18, `--arm hybrid`, generation by Groq `openai/gpt-oss-120b`,
+**on the `local` profile** — files + `rank_bm25` + bge-small.
+
+That last clause matters and used to be missing. Every number in this section
+describes the file backend; the deployed `dev` profile retrieves through
+Postgres, and for a while the two behaved very differently without anything
+saying so. Committed verbatim as
+[`harness_output.json`](backend/harness_output.json) — the file the harness
+wrote, not a transcription of it.
+
+**The `dev` profile now scores the same 100%**, measured end to end through
+Supabase, Gemini embeddings and the CRAG grader, and committed as
+[`harness_dev.json`](backend/harness_dev.json). It took two attempts: the first
+scored 95%, because the grader — which runs only on `dev` — was shown a
+truncated document and dropped the one that answered the question. Both profiles
+now agree question for question.
 
 |  | agent cited something | agent said `no_match` |
 |---|---|---|

@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
-from agent.config import Settings, settings as default_settings
+from agent.config import Settings, current_settings
 from agent.core.corpus import known_failure_modes  # noqa: F401 - re-exported for tests
 from agent.core.models import Candidate, Doc, QuerySpec
 from agent.core.retrieve import LexicalIndex, build_index
@@ -34,11 +35,31 @@ from agent.store import StoreUnavailable
 TIMEOUT_S = 15.0
 
 
+def filter_value(value: object) -> str:
+    """Percent-encode a value before it goes into a PostgREST filter.
+
+    PostgREST filters are query parameters, so an unescaped value is not data -
+    it is syntax. A `,` splits an `in.()` list, a `&` starts another filter, a
+    `*` is a `like` wildcard, and a `.` separates the operator from its
+    argument. A value carrying any of them changes which rows the request
+    matches.
+
+    That mattered in one place in particular. `ingest.pipeline.replace_chunks`
+    interpolated a `doc_id` straight into a **DELETE** filter, and that `doc_id`
+    comes from the front-matter of an uploaded document - so it was
+    attacker-controlled input steering a delete. Everything that builds a
+    filter path goes through here now, including the answer cache, whose key is
+    a hex digest and was never exploitable but has no reason to be the
+    exception.
+    """
+    return urllib.parse.quote(str(value), safe="")
+
+
 class SupabaseStore:
     name = "supabase"
 
     def __init__(self, cfg: Settings | None = None):
-        self.cfg = cfg or default_settings
+        self.cfg = cfg or current_settings()
         if not self.cfg.supabase.configured:
             raise StoreUnavailable(
                 "SUPABASE_URL and SUPABASE_SERVICE_KEY are not set. "

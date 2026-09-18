@@ -38,7 +38,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from agent.config import Cloudinary, Settings, settings as default_settings
+from agent.config import Cloudinary, Settings, current_settings
 
 TIMEOUT_S = 30.0
 API_BASE = "https://api.cloudinary.com/v1_1"
@@ -83,7 +83,7 @@ def build_upload_signature(
     mint another for a different folder or a different `public_id`, which is the
     whole point of signing server-side rather than shipping an unsigned preset.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     cloudinary = cfg.cloudinary
     if not cloudinary.configured:
         raise CloudinaryUnavailable(
@@ -138,7 +138,7 @@ def list_documents(cfg: Settings | None = None) -> list[dict]:
     a file into Cloudinary is enough to make it a candidate - no manifest to
     keep in step.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     cloudinary = cfg.cloudinary
     if not cloudinary.configured:
         raise CloudinaryUnavailable("Cloudinary is not configured.")
@@ -159,21 +159,25 @@ def fetch_document(public_id: str, cfg: Settings | None = None) -> bytes:
     the request path is also what keeps `pymupdf` and `fastembed` out of the
     deployed bundle entirely.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     cloudinary = cfg.cloudinary
     if not cloudinary.configured:
         raise CloudinaryUnavailable("Cloudinary is not configured.")
 
     url = (
         f"https://res.cloudinary.com/{cloudinary.cloud_name}/"
-        f"{cloudinary.resource_type}/upload/{public_id}"
+        f"{cloudinary.resource_type}/upload/{urllib.parse.quote(public_id)}"
     )
-    return _get(url, {"Authorization": _basic_auth(cloudinary)}, binary=True)
+    # No Authorization header. `res.cloudinary.com` is the public delivery CDN,
+    # not the admin API, and it neither requires nor reads one - so sending
+    # credentials derived from the API secret put them on the wire for no
+    # reason. The admin API calls in `list_documents` still authenticate.
+    return _get(url, {}, binary=True)
 
 
 def delivery_url(public_id: str, cfg: Settings | None = None) -> str:
     """The public URL a citation links to."""
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     cloudinary = cfg.cloudinary
     return (
         f"https://res.cloudinary.com/{cloudinary.cloud_name}/"

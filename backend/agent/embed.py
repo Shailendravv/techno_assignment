@@ -30,7 +30,7 @@ import math
 from pathlib import Path
 from typing import Protocol, Sequence
 
-from agent.config import Embedding, Settings, settings as default_settings
+from agent.config import Embedding, Settings, current_settings
 
 
 class EmbedderUnavailable(RuntimeError):
@@ -318,7 +318,7 @@ def get_embedder(cfg: Settings | None = None) -> Embedder:
     the ONNX session it wraps is not, and doing it per request would dominate
     every response time.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     embedding = cfg.embedding
 
     if embedding.signature in _cached:
@@ -351,7 +351,7 @@ def embedding_available(cfg: Settings | None = None) -> bool:
     Checked before routing into the dense arm so that a missing key degrades to
     lexical-only - which is a working system - rather than to a 500.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     if not cfg.embedding.enabled:
         return False
     backend = cfg.embedding.backend.lower()

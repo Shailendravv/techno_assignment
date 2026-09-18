@@ -140,8 +140,11 @@ Latency is up.
 """
     doc = parse_bytes(raw, "RB-013.md")
 
+    # Prefixed, not taken at face value: `upsert_document` writes on
+    # `on_conflict=doc_id`, so an uploaded file claiming an `RB-` id would
+    # replace a curated runbook rather than arrive alongside it.
     assert (doc.doc_id, doc.service, doc.failure_mode) == (
-        "RB-013", "search-api", "latency"
+        "UP-RB-013", "search-api", "latency"
     )
 
 

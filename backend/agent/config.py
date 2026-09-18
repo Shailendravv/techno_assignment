@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,20 +32,25 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_dotenv() -> None:
-    """Read `.env` from the repository root.
+    """Read `.env` from the repository root, filling gaps only.
 
     Deliberately hand-rolled rather than a dependency: it is fifteen lines, and
     everything in `requirements.txt` has to be justified against Vercel's
-    bundle limit. On a cloud platform (Vercel, Lambda) real environment
-    variables win, so the deployed function uses the platform's configuration
-    and ignores any `.env` that gets bundled by mistake. Locally the reverse:
-    `.env` takes precedence, so editing it takes effect on the next reload
-    instead of being shadowed by a stale process environment.
+    bundle limit.
+
+    **A real environment variable always wins**, on every platform. That is
+    what the README documents - "secrets are read in priority order: the
+    environment, then `~/.runbook-agent/secrets.env`, then `backend/.env`" -
+    and it used to be true only in the cloud. Locally `.env` overwrote the
+    process environment, so `GROQ_API_KEY=... ./start.sh`, the one-run override
+    the README gives as an example, was silently ignored whenever `.env`
+    happened to define the same key. It also meant the test suite could not
+    clear a credential: every `load_settings()` call re-invokes this function,
+    which put it straight back.
     """
     path = ROOT / ".env"
     if not path.is_file():
         return
-    is_cloud = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -52,7 +58,7 @@ def _load_dotenv() -> None:
         key, _, value = line.partition("=")
         key = key.strip().removeprefix("export ").strip()
         value = value.strip().strip("\"'")
-        if key and (not is_cloud or key not in os.environ):
+        if key and key not in os.environ:
             os.environ[key] = value
 
 
@@ -87,6 +93,7 @@ def load_profile(name: str | None = None) -> dict:
 
 
 _profile = load_profile()
+_profile_lock = threading.Lock()
 
 
 def _raw(name: str):
@@ -293,6 +300,14 @@ class Settings:
     store: str = field(default_factory=lambda: _env("STORE_BACKEND", "files"))
 
     groq_api_key: str = field(default_factory=lambda: _env("GROQ_API_KEY", ""))
+
+    # Shared secret for `POST /ingest/sign`, which mints a Cloudinary upload
+    # signature. Unset means the route is disabled rather than open: an upload
+    # signature is a write capability against our object store, and the
+    # ingestion pipeline turns whatever lands there into corpus documents that
+    # a model is then asked to answer from. An unconfigured deployment should
+    # expose no part of that chain.
+    ingest_api_key: str = field(default_factory=lambda: _env("INGEST_API_KEY", ""))
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY", ""))
 
     # Langfuse. Absent keys mean tracing is off and no network call is made -
@@ -322,6 +337,28 @@ class Settings:
     # harness measures the pipeline rather than the cache.
     answer_cache: bool = field(default_factory=lambda: _env_bool("ANSWER_CACHE", False))
 
+    # How long a cached answer may be served, in seconds. 0 disables expiry.
+    #
+    # This is the *third* invalidation mechanism, and it is the blunt one. The
+    # other two are exact and instant: `corpus_version` drops every answer when
+    # the corpus is re-ingested, and `cache_key()` folds in `_CACHE_VERSION`,
+    # the retrieval mode, the generator model and whether the grader ran, so
+    # changing any of those makes prior rows unreachable rather than stale.
+    #
+    # What neither catches is a behaviour change nobody remembered to version -
+    # a reworded prompt, a fixed grader excerpt. This bound is what makes that
+    # class of mistake temporary instead of permanent, and it needs no
+    # discipline to work, which is the whole argument for it.
+    #
+    # The cost is real and worth stating: this cache exists so that repeated
+    # questions during a live demo do not each spend Groq tokens against a tier
+    # allowing roughly two questions a minute. At 60 seconds it will rarely be
+    # hit by a human asking questions at human speed, so it protects the quota
+    # much less than it used to.
+    answer_cache_ttl_s: int = field(
+        default_factory=lambda: _env_int("ANSWER_CACHE_TTL_S", 60)
+    )
+
     # One log line per pipeline stage, per run - including the stages that were
     # skipped or never built. See `agent/stages.py`. On by default because the
     # question it answers ("which half of the pipeline actually ran?") is one
@@ -329,6 +366,18 @@ class Settings:
     # a deployed profile if twelve lines a request is more log volume than the
     # platform's retention is worth.
     stage_log: bool = field(default_factory=lambda: _env_bool("STAGE_LOG", True))
+
+    # Requests per minute per client IP on `POST /ask`. Every request that
+    # clears the gate spends Groq tokens against a shared 8k-per-minute free
+    # tier, so an unauthenticated endpoint with no limit is a quota-exhaustion
+    # button. In-process and therefore per-instance: honest about what it is,
+    # and still the difference between a script costing us a day of quota in a
+    # minute and it not.
+    #
+    # 0 disables it.
+    ask_rate_limit_per_minute: int = field(
+        default_factory=lambda: _env_int("ASK_RATE_LIMIT_PER_MINUTE", 20)
+    )
 
     # Groq free tier returns 429 readily. Retry with exponential backoff.
     llm_max_retries: int = field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
@@ -350,6 +399,11 @@ class Settings:
     @property
     def has_groq(self) -> bool:
         return bool(self.groq_api_key)
+
+    @property
+    def ingest_enabled(self) -> bool:
+        """Signed uploads require both a secret to check and somewhere to put them."""
+        return bool(self.ingest_api_key and self.cloudinary.configured)
 
     @property
     def has_gemini(self) -> bool:
@@ -380,6 +434,7 @@ class Settings:
             "gemini_configured": self.has_gemini,
             "supabase_configured": self.supabase.configured,
             "cloudinary_configured": self.cloudinary.configured,
+            "ingest_enabled": self.ingest_enabled,
             "langfuse_configured": self.has_langfuse,
         }
 
@@ -395,16 +450,40 @@ def load_settings(profile: str | None = None) -> Settings:
     global _profile
     _load_dotenv()
     if profile is not None:
-        previous = _profile
-        _profile = load_profile(profile)
-        try:
-            return Settings(profile=profile)
-        finally:
-            _profile = previous
+        # Swapping a module global and putting it back is not safe to do from
+        # two threads at once - the second restore wins and the first caller's
+        # `finally` writes back a profile that was already stale. The lock makes
+        # the swap-build-restore one operation. It is uncontended in the normal
+        # case: the deployed app never passes a profile, only the harness and
+        # the tests do.
+        with _profile_lock:
+            previous = _profile
+            _profile = load_profile(profile)
+            try:
+                return Settings(profile=profile)
+            finally:
+                _profile = previous
     return Settings()
 
 
 settings = load_settings()
+
+
+def current_settings() -> Settings:
+    """The active settings, resolved at call time rather than at import.
+
+    Every module that needs a default configuration goes through this rather
+    than binding `settings` into its own namespace with `import ... as
+    default_settings`. The difference matters in exactly one place and it is not
+    a small one: a name bound at import cannot be replaced afterwards, so the
+    test suite had no way to substitute a configuration once `agent.config` had
+    been imported - which happens before any fixture runs. That is why tests
+    that assert on *absent* credentials were silently reading a developer's
+    `.env`, and why the suite was not the offline thing it claimed to be.
+
+    One indirection, one place to patch.
+    """
+    return settings
 
 NO_MATCH_MESSAGE = (
     "I couldn't find anything in the runbooks that answers this. "

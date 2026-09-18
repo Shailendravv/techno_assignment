@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -128,6 +129,25 @@ def _pdf_to_markdown(raw: bytes) -> str:
     return pymupdf4llm.to_markdown(path)
 
 
+# Uploaded documents get their own `doc_id` namespace.
+#
+# `upsert_document` writes on `on_conflict=doc_id`, so a document whose
+# front-matter claims `doc_id: RB-001` does not arrive alongside RB-001 - it
+# *replaces* it. The curated corpus uses `RB-NNN`; anything arriving through
+# ingestion is prefixed so the two can never collide, however the uploaded file
+# labels itself.
+UPLOAD_DOC_ID_PREFIX = "UP-"
+_CURATED_DOC_ID = re.compile(r"^RB-\d+$", re.IGNORECASE)
+
+
+def _namespaced_doc_id(raw: object) -> str:
+    """A `doc_id` that cannot overwrite a curated runbook."""
+    doc_id = str(raw).strip()
+    if _CURATED_DOC_ID.match(doc_id):
+        return f"{UPLOAD_DOC_ID_PREFIX}{doc_id}"
+    return doc_id
+
+
 def _doc_from_markdown(text: str, filename: str) -> Doc:
     """Parse front-matter, falling back to something usable when it is absent.
 
@@ -162,7 +182,7 @@ def _doc_from_markdown(text: str, filename: str) -> Doc:
 
     with recorder.stage("extract_metadata") as ledger:
         doc = Doc(
-            doc_id=str(meta.get("doc_id") or stem).strip(),
+            doc_id=_namespaced_doc_id(meta.get("doc_id") or stem),
             title=str(meta.get("title") or stem).strip(),
             service=optional("service"),
             failure_mode=optional("failure_mode"),
@@ -221,30 +241,31 @@ class SupabaseWriter:
         )
 
     def replace_chunks(self, doc_id: str, chunks: list[Chunk], vectors: list) -> None:
-        """Delete then insert, rather than upsert.
+        """Delete then insert, in one transaction.
 
-        A re-chunked document may produce *fewer* sections than before, and an
-        upsert keyed on `chunk_id` would leave the orphans behind - stale
-        passages that still match queries and still resolve to a parent
-        document whose text no longer contains them.
+        Delete-then-insert rather than upsert, because a re-chunked document may
+        produce *fewer* sections than before and an upsert keyed on `chunk_id`
+        would leave the orphans behind - stale passages that still match queries
+        and still resolve to a parent document whose text no longer contains
+        them.
+
+        In one transaction, because as two HTTP calls there was a window in
+        which the document had no chunks at all, and a failure inside it was
+        permanent: the `documents` row survived with its `content`, so the
+        corpus looked complete and the lexical arm kept working while the dense
+        arm went silently blind for that document. See
+        `supabase/migrations/0005_atomic_chunks.sql`.
         """
-        self.store._request(
-            f"/rest/v1/chunks?doc_id=eq.{doc_id}", method="DELETE"
-        )
-        if not chunks:
-            return
-
         rows = [
             {
                 "chunk_id": chunk.chunk_id,
-                "doc_id": chunk.doc_id,
                 "section": chunk.section,
                 "text": chunk.text,
                 "embedding": vector,
             }
             for chunk, vector in zip(chunks, vectors or [None] * len(chunks))
         ]
-        self.store._request("/rest/v1/chunks", payload=rows)
+        self.store.rpc("replace_chunks", {"p_doc_id": doc_id, "p_chunks": rows})
 
     def bump_version(self, documents: int, chunks: int, embedder: str) -> int:
         result = self.store.rpc(

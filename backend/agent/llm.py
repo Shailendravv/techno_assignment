@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass
 
-from agent.config import Settings, settings as default_settings
+from agent.config import Settings, current_settings
 from logger.zap import create_logger
 
 log = create_logger()
@@ -44,28 +45,67 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 
 _client = None
+# FastAPI runs sync endpoints in a threadpool, so two requests genuinely race
+# here. Without the lock one thread can set `_client = None` while another is
+# reading it - benign in that it only costs a rebuilt client, but the window
+# where a caller sees a client built for a different key is not.
+_client_lock = threading.Lock()
 
 
 def _get_client(cfg: Settings):
     global _client
-    if _client is not None:
-        # Keyed on the api key, not just "is it built": `_load_dotenv` now lets
-        # a local `.env` edit change the key inside a live process, and a
-        # client cached under the old one would keep using it silently.
-        if getattr(_client, "api_key", None) == cfg.groq_api_key:
-            return _client
-        _client = None
-    if not cfg.groq_api_key:
-        raise LLMUnavailable(
-            "GROQ_API_KEY is not set. Retrieval-only paths still work; "
-            "grounding does not."
-        )
-    try:
-        from groq import Groq
-    except ImportError as exc:  # pragma: no cover - environment problem
-        raise LLMUnavailable("The `groq` package is not installed.") from exc
-    _client = Groq(api_key=cfg.groq_api_key, timeout=cfg.llm_timeout_s)
-    return _client
+    with _client_lock:
+        if _client is not None:
+            # Keyed on the api key, not just "is it built": `_load_dotenv` lets
+            # a local `.env` edit change the key inside a live process, and a
+            # client cached under the old one would keep using it silently.
+            if getattr(_client, "api_key", None) == cfg.groq_api_key:
+                return _client
+            _client = None
+        if not cfg.groq_api_key:
+            raise LLMUnavailable(
+                "GROQ_API_KEY is not set. Retrieval-only paths still work; "
+                "grounding does not."
+            )
+        try:
+            from groq import Groq
+        except ImportError as exc:  # pragma: no cover - environment problem
+            raise LLMUnavailable("The `groq` package is not installed.") from exc
+        _client = Groq(api_key=cfg.groq_api_key, timeout=cfg.llm_timeout_s)
+        return _client
+
+
+def status_code_of(exc: Exception) -> int | None:
+    """The HTTP status an exception carries, whichever client raised it.
+
+    Two shapes reach this codebase and they do not agree. The `groq` SDK
+    exposes `status_code` on the exception and headers under
+    `exc.response.headers`; `urllib.error.HTTPError` - which is what the
+    Supabase store and the Cloudinary client raise, because both talk HTTP over
+    the standard library rather than pulling in an SDK - exposes `code` and
+    `headers` directly.
+
+    Reading only the first shape meant every Supabase and Cloudinary 429 was
+    classified as non-retryable.
+    """
+    for attribute in ("status_code", "code", "status"):
+        value = getattr(exc, attribute, None)
+        if isinstance(value, int):
+            return value
+    response = getattr(exc, "response", None)
+    value = getattr(response, "status_code", None)
+    return value if isinstance(value, int) else None
+
+
+def is_upstream_rate_limit(exc: Exception) -> bool:
+    """Whether this exception is a 429 from someone we depend on.
+
+    Public because the API layer needs it too: a rate limit that survived the
+    retry budget should become a 503 with a `Retry-After`, not an opaque 500.
+    """
+    if status_code_of(exc) == 429:
+        return True
+    return type(exc).__name__ == "RateLimitError"
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -75,14 +115,18 @@ def _is_rate_limit(exc: Exception) -> bool:
     this module still imports when the package is absent.
     """
     if type(exc).__name__ in {"RateLimitError", "APIStatusError"}:
-        return getattr(exc, "status_code", None) in (429, None)
-    return getattr(exc, "status_code", None) == 429
+        return status_code_of(exc) in (429, None)
+    return status_code_of(exc) == 429
 
 
 def _retry_after(exc: Exception, attempt: int) -> float:
     """Prefer the server's own backoff hint; fall back to exponential."""
-    headers = getattr(getattr(exc, "response", None), "headers", None) or {}
-    hinted = headers.get("retry-after")
+    headers = (
+        getattr(getattr(exc, "response", None), "headers", None)
+        or getattr(exc, "headers", None)
+        or {}
+    )
+    hinted = headers.get("retry-after") or headers.get("Retry-After")
     if hinted:
         try:
             return min(float(hinted), 30.0)
@@ -105,7 +149,7 @@ def chat(
     """
     from agent.stages import current_recorder
 
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     model = getattr(cfg.models, role)
     client = _get_client(cfg)
     recorder = current_recorder()
@@ -292,7 +336,7 @@ def chat_json(
     only - and then give up. One repair, not a loop: on a tier this
     rate-limited, an unbounded retry is worse than a degraded answer.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     first = chat(messages, role=role, cfg=cfg, max_tokens=max_tokens)
     try:
         return extract_json(first.text), first.calls

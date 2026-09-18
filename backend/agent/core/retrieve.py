@@ -230,19 +230,57 @@ def coverage(question: str, index: LexicalIndex) -> float:
     return sum(1 for t in terms if t in index.vocabulary) / len(terms)
 
 
-def normalised_top_score(candidates: list[Candidate], question: str) -> float:
-    """BM25 score of the best candidate, per content term.
+def normalised_top_score(
+    candidates: list[Candidate], question: str, index: LexicalIndex | None = None
+) -> float:
+    """BM25 score of the best surviving candidate, per content term.
 
     Raw BM25 scores are not comparable between queries - a long question scores
     higher simply by having more terms to match. Dividing by the number of
     content terms makes the number mean "average match strength per meaningful
     word", which is comparable, and therefore something a single threshold can
     be set against.
+
+    **Scored against the local index, not against whatever the store returned.**
+    That is the whole point and it is worth being explicit, because the obvious
+    reading - "use the score the retriever computed" - is what broke the
+    deployed system.
+
+    `lexical_floor` is calibrated against `rank_bm25`, whose scores land in the
+    2-6 range on this corpus. The SQL backend ranks with `ts_rank_cd`, which
+    returns values around 0.01 and, because `websearch_to_tsquery` builds a
+    conjunctive query, returns exactly 0.0 for any question whose every word is
+    not present in one document. Comparing that against a floor of 0.35 meant
+    the lexical branch of the gate could never be taken on Postgres, so every
+    question fell through to the cosine floor - a threshold deliberately set
+    *above* every measured negative, as an inert guard rail. The result was a
+    system that refused answerable questions in exactly the configuration it
+    deploys in.
+
+    `lexical_index()` is already built locally by *both* stores, for precisely
+    this reason (see `agent.store.Store.lexical_index`): the gate must not
+    depend on which backend is mounted. It simply was not being used. Passing
+    it here makes one calibration valid everywhere, with no threshold change.
+
+    Taking `max` over the survivors rather than element `[0]` is the second
+    half. `_prefer_specific` reorders kept candidates for presentation - it
+    documents itself as a tie-break, not a score adjustment - but the gate read
+    `[0]`, so a presentation choice moved the number a threshold was compared
+    against. `max` is order-independent and says what was meant.
     """
     if not candidates:
         return 0.0
     terms = content_terms(question)
-    return candidates[0].lexical_score / max(len(terms), 1)
+
+    if index is not None:
+        by_doc_id = dict(zip((d.doc_id for d in index.docs), index.scores(question)))
+        best = max((by_doc_id.get(c.doc_id, 0.0) for c in candidates), default=0.0)
+    else:
+        # No index to hand: fall back to whatever the retriever scored. Correct
+        # for the file backend, which is the only caller that can reach this.
+        best = max((c.lexical_score for c in candidates), default=0.0)
+
+    return best / max(len(terms), 1)
 
 
 def passes_gate(
@@ -271,7 +309,7 @@ def passes_gate(
             f"the corpus (floor {cfg.coverage_floor:.0%})"
         )
 
-    score = normalised_top_score(candidates, spec.raw)
+    score = normalised_top_score(candidates, spec.raw, index)
     if score < cfg.lexical_floor:
         return False, (
             f"best lexical score {score:.2f} per term is below the floor "
@@ -459,7 +497,7 @@ def passes_hybrid_gate(
             f"{best_cosine(candidates):.2f} does not override this"
         )
 
-    lexical = normalised_top_score(candidates, spec.raw)
+    lexical = normalised_top_score(candidates, spec.raw, index)
     cosine_score = best_cosine(candidates)
 
     if lexical >= cfg.lexical_floor:

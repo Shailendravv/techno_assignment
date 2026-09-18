@@ -74,7 +74,7 @@ def test_the_grader_keeps_only_what_it_judges_relevant(monkeypatch, docs, cfg):
     monkeypatch.setattr("agent.nodes.grade.chat_json", script)
 
     candidates = [Candidate(doc=d) for d in docs[:3]]
-    kept, reason, calls = grade_candidates("checkout-api CPU", candidates, cfg=cfg)
+    kept, reason, calls, _ = grade_candidates("checkout-api CPU", candidates, cfg=cfg)
 
     assert [c.doc_id for c in kept] == ["RB-001"]
     assert calls == 1
@@ -100,7 +100,7 @@ def test_the_grader_cannot_resurrect_a_document_it_was_not_shown(
     monkeypatch.setattr("agent.nodes.grade.chat_json", script)
 
     candidates = [Candidate(doc=d) for d in docs[:3]]
-    kept, _, _ = grade_candidates("q", candidates, cfg=cfg)
+    kept, _, _, _ = grade_candidates("q", candidates, cfg=cfg)
 
     assert [c.doc_id for c in kept] == ["RB-001"]
 
@@ -118,7 +118,7 @@ def test_a_broken_grader_fails_open_rather_than_refusing_everything(
     monkeypatch.setattr("agent.nodes.grade.chat_json", explode)
 
     candidates = [Candidate(doc=d) for d in docs[:3]]
-    kept, reason, calls = grade_candidates("q", candidates, cfg=cfg)
+    kept, reason, calls, _ = grade_candidates("q", candidates, cfg=cfg)
 
     assert [c.doc_id for c in kept] == [c.doc_id for c in candidates]
     assert calls == 0
@@ -126,9 +126,89 @@ def test_a_broken_grader_fails_open_rather_than_refusing_everything(
 
 
 def test_grading_nothing_costs_no_call(cfg):
-    kept, _, calls = grade_candidates("q", [], cfg=cfg)
+    kept, _, calls, _ = grade_candidates("q", [], cfg=cfg)
 
     assert kept == [] and calls == 0
+
+
+# --------------------------------------------------------------------------
+# What the grader is shown.
+#
+# These exist because of a wrong citation that only appeared on the deployed
+# profile, where the grader is the one stage that runs and locally does not.
+# The grader was sound; the excerpt it was given was not.
+# --------------------------------------------------------------------------
+
+def test_the_grader_is_shown_the_section_that_answers_the_question(
+    monkeypatch, docs, cfg
+):
+    """RB-010 defines expand-and-contract 1258 characters in.
+
+    A fixed head-of-document excerpt cut it off, so the grader saw a copy of the
+    policy that never mentioned the term, dropped it, and kept RB-005 - a
+    rollback runbook that happens to mention it in passing at character 800.
+    The harness scored that as WRONG_CITATION on the `dev` profile while the
+    `files` profile, which does not grade at all, scored it correct.
+    """
+    script = Script({"relevant": ["RB-010"], "reason": "defines it"})
+    monkeypatch.setattr("agent.nodes.grade.chat_json", script)
+
+    by_id = {d.doc_id: d for d in docs}
+    candidates = [
+        Candidate(doc=by_id["RB-005"], lexical_score=1.0),
+        Candidate(doc=by_id["RB-010"], lexical_score=0.9),
+    ]
+
+    grade_candidates(
+        "What is expand-and-contract and why do migrations need two releases?",
+        candidates,
+        cfg=cfg,
+    )
+
+    shown = script.prompts[0]
+    assert "always in two separate releases" in shown, (
+        "the grader must be shown RB-010's actual definition, not just its opening"
+    )
+
+
+def test_the_grader_excerpt_stays_bounded(docs):
+    """The economy the truncation was there for still has to hold.
+
+    A grader that reads whole documents costs more than the grounding call it
+    exists to protect, so showing the matching section must not turn into
+    showing everything.
+    """
+    from agent.nodes.grade import _format_for_grading
+
+    by_id = {d.doc_id: d for d in docs}
+    candidates = [Candidate(doc=by_id["RB-010"], lexical_score=1.0)]
+    question = "What is expand-and-contract and why do migrations need two releases?"
+
+    shown = _format_for_grading(candidates, question)
+
+    assert len(shown) < len(by_id["RB-010"].text) + 400
+    assert "[...truncated]" in shown or "[...]" in shown
+
+
+def test_an_unrelated_question_gets_only_the_opening(docs):
+    """No matching section means no second excerpt - and no wasted tokens."""
+    from agent.nodes.grade import _excerpt
+    from agent.core.retrieve import content_terms
+
+    by_id = {d.doc_id: d for d in docs}
+    excerpt = _excerpt(by_id["RB-010"].text, content_terms("zzzz qqqq"), 600, 700)
+
+    assert excerpt.endswith("[...truncated]")
+    assert "[...]" not in excerpt.replace("[...truncated]", "")
+
+
+def test_a_short_document_is_shown_whole(docs):
+    from agent.nodes.grade import _excerpt
+
+    excerpt = _excerpt("# Tiny\n\nA short document.", ["short"], 600, 700)
+
+    assert excerpt == "# Tiny\n\nA short document."
+    assert "truncated" not in excerpt
 
 
 # --------------------------------------------------------------------------

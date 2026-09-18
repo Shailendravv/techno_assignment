@@ -303,6 +303,19 @@ def _run_and_capture(question: str, monkeypatch) -> _CollectingLogger:
     log = _CollectingLogger()
     monkeypatch.setattr(stages, "_default_logger", lambda: log)
 
+    # Stubbed for the same reason `fake_llm` exists in test_agent_pipeline: these
+    # assertions are about what the *ledger* reports, not about what a model
+    # says. A question that clears the gate reaches the grounding node, and
+    # without this the test needs a live GROQ_API_KEY - which is how it came to
+    # pass only on a machine that had one.
+    monkeypatch.setattr(
+        "agent.nodes.ground.chat_json",
+        lambda messages, role="generator", cfg=None, max_tokens=1024: (
+            {"answer": "stub", "cited_doc_ids": []},
+            1,
+        ),
+    )
+
     from agent.api import answer_question
     from agent.config import load_settings
 

@@ -18,6 +18,7 @@ graded on were written by somebody else.
 
 from __future__ import annotations
 
+import functools
 import re
 
 from agent.core.models import Doc, QuerySpec
@@ -78,10 +79,32 @@ INTENT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
 # Matches things shaped like a service name: "search-api", "payments-api",
-# "recommendation-engine", or "the billing service".
+# "recommendation-engine".
+#
+# `the <word> service` is not an alternative here, because `_normalise` has
+# already rewritten that form to `<word>-api` before this pattern ever runs. It
+# used to be listed as one, and that branch was unreachable.
 _SERVICE_SHAPED = re.compile(
     r"\b([a-z][a-z0-9]*(?:-[a-z0-9]+)*-(?:api|service|engine|worker|gateway))\b"
-    r"|\bthe\s+([a-z][a-z0-9]*)\s+service\b"
+)
+
+# Words that are never the name of a service, however they sit in a sentence.
+#
+# This list fixes a refusal bug, and the refusal was the expensive kind.
+# `_normalise` rewrote `<word> api` to `<word>-api` unconditionally, so "Which
+# API should I check first?" produced the service name `which-api` - which no
+# document covers, and `unknown_service` short-circuits the gate straight to
+# `no_match` before any model is called. This system's own reasoning is that
+# admitting a doubtful question is recoverable downstream while refusing a good
+# one is not, which makes a determiner read as a service name the worst
+# available false positive. "Which API should I check first for high CPU?" was
+# refused outright while RB-001, RB-003 and RB-006 sat in the shortlist.
+_NOT_A_SERVICE = frozenset(
+    """
+    a an the this that these those which what whose whatever any some no every
+    each either neither our your their my his her its all both one another same
+    other such more most many few several
+    """.split()
 )
 
 
@@ -89,11 +112,20 @@ def _normalise(question: str) -> str:
     """Lowercase, and collapse the several ways people write a service name.
 
     "checkout api", "checkout_api" and "the checkout service" all become
-    "checkout-api" so that one set of patterns can match them all.
+    "checkout-api" so that one set of patterns can match them all - unless the
+    leading word is a determiner or an interrogative, in which case there is no
+    service name there to collapse.
     """
     text = question.lower()
-    text = re.sub(r"\b([a-z][a-z0-9]*)[ _]api\b", r"\1-api", text)
-    text = re.sub(r"\bthe\s+([a-z][a-z0-9]*)\s+service\b", r"\1-api", text)
+
+    def _join(match: "re.Match[str]") -> str:
+        word = match.group(1)
+        if word in _NOT_A_SERVICE:
+            return match.group(0)
+        return f"{word}-api"
+
+    text = re.sub(r"\b([a-z][a-z0-9]*)[ _]api\b", _join, text)
+    text = re.sub(r"\bthe\s+([a-z][a-z0-9]*)\s+service\b", _join, text)
     return text
 
 
@@ -124,7 +156,7 @@ def _find_unknown_service(text: str, known: tuple[str, ...]) -> str | None:
     genuinely cannot answer from the runbooks.
     """
     for match in _SERVICE_SHAPED.finditer(text):
-        name = match.group(1) or match.group(2)
+        name = match.group(1)
         if not name:
             continue
         if name in known:
@@ -135,18 +167,46 @@ def _find_unknown_service(text: str, known: tuple[str, ...]) -> str | None:
     return None
 
 
+@functools.lru_cache(maxsize=256)
+def _synonym_pattern(synonym: str) -> re.Pattern[str]:
+    """A whole-word matcher for one synonym.
+
+    Compiled once per synonym; the table is fixed and small.
+    """
+    return re.compile(rf"(?<![a-z0-9]){re.escape(synonym)}(?![a-z0-9])")
+
+
 def _find_failure_mode(text: str, allowed: tuple[str, ...]) -> str | None:
     """Pick the failure mode with the most specific match.
 
     Longest matching phrase wins, so "too many connections" beats a stray
     "connection" and "exit code 137" is not out-voted by a generic word.
+
+    **Matched on word boundaries, not as substrings.** A plain `synonym in text`
+    reads the middle of unrelated words, and because the metadata filter is a
+    *hard drop* rather than a score penalty, a false hit here does not weaken a
+    document's ranking - it deletes it from consideration. Two cases were live:
+
+        "What are the deploy parameters for checkout-api?"
+            pa[ram]eters      -> "ram"  -> failure_mode=memory
+            ... which dropped RB-001, RB-002 and RB-012 as "failure mode
+            mismatch", including the CPU runbook the question was about.
+
+        "The feature flag rollout is broken"
+            f[lag]            -> "lag"  -> failure_mode=sync_lag
+
+    The lookbehind and lookahead are on `[a-z0-9]` rather than `\b` because the
+    synonyms contain hyphens and spaces ("py-spy", "too many connections"), and
+    `\b` between a hyphen and a space does not mean what it appears to.
     """
     best: tuple[int, str] | None = None
     for mode, synonyms in FAILURE_SYNONYMS.items():
         if allowed and mode not in allowed:
             continue
         for synonym in synonyms:
-            if synonym in text and (best is None or len(synonym) > best[0]):
+            if _synonym_pattern(synonym).search(text) and (
+                best is None or len(synonym) > best[0]
+            ):
                 best = (len(synonym), mode)
     return best[1] if best else None
 

@@ -44,7 +44,7 @@ from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator, Optional
 
-from agent.config import Settings, settings as default_settings
+from agent.config import Settings, current_settings
 
 DEFAULT_HOST = "https://cloud.langfuse.com"
 
@@ -121,7 +121,7 @@ def _credentials(cfg: Settings | None = None) -> tuple[str, str, str] | None:
     Langfuse docs and CLI have used both names, and a key pair that silently
     does nothing because the host was spelled the other way is a bad half hour.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
 
     # The environment first, and settings only as the fallback. `Settings` is a
     # frozen snapshot taken at import; the environment is what is true now, and
@@ -195,7 +195,7 @@ def client(cfg: Settings | None = None):
     """
     global _client, _client_failed
 
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
 
     if _client is not None or _client_failed:
         return _client
@@ -334,7 +334,7 @@ def trace_run(
     scores instead, in `finish()` below. What is left is what is known before
     the pipeline runs: how this instance is configured.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
     active = client(cfg)
     if active is None:
         yield NOOP

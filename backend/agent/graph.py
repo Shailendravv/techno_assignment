@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, StateGraph
 
-from agent.config import NO_MATCH_MESSAGE, Settings, settings as default_settings
+from agent.config import NO_MATCH_MESSAGE, Settings, current_settings
 from agent.core.confidence import score_confidence
 from agent.core.query import analyze_query
 from agent.core.retrieve import (
@@ -56,7 +56,7 @@ from agent.store import get_store
 
 
 def _cfg(state: AgentState) -> Settings:
-    return state.get("settings") or default_settings
+    return state.get("settings") or current_settings()
 
 
 def _query(state: AgentState) -> str:
@@ -238,7 +238,9 @@ def grade_node(state: AgentState) -> dict:
         return {"graded": candidates, "trace": ["grade: disabled, candidates passed through"]}
 
     with recorder.stage("relevance_grade") as ledger:
-        kept, reason, calls = grade_candidates(state["question"], candidates, cfg=cfg)
+        kept, reason, calls, grader_degraded = grade_candidates(
+            state["question"], candidates, cfg=cfg
+        )
         ledger.detail(f"kept={[c.doc_id for c in kept]} llm_calls={calls} - {reason}")
         ledger.io(
             input={
@@ -256,7 +258,12 @@ def grade_node(state: AgentState) -> dict:
     if dropped:
         trace.append(f"grade dropped: {dropped}")
 
-    return {"graded": kept, "trace": trace, "llm_calls": calls}
+    return {
+        "graded": kept,
+        "trace": trace,
+        "llm_calls": calls,
+        "degraded": grader_degraded,
+    }
 
 
 def rewrite_node(state: AgentState) -> dict:
@@ -293,7 +300,7 @@ def ground_node(state: AgentState) -> dict:
     # are the only places that know what the prompt contained and whether a
     # request actually reached Groq.
     with recorder.stage("generate") as ledger:
-        answer, cited, invented, calls = ground(
+        answer, cited, invented, calls, degraded = ground(
             state["question"],
             candidates,
             role=state.get("model_role", "generator"),
@@ -328,6 +335,7 @@ def ground_node(state: AgentState) -> dict:
         "raw_cited_ids": cited,
         "trace": trace,
         "llm_calls": calls,
+        "degraded": degraded,
     }
 
 

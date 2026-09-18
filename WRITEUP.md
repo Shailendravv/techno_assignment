@@ -169,10 +169,29 @@ hybrid trading `no_match` recall for citation recall.
 
 ### What is NOT measured, and why
 
-**The end-to-end four-outcome scores are not in this document, because I have not
-run them.** The harness that produces them is built, tested (`tests/test_scoring.py`)
-and ready — but scoring requires a `GROQ_API_KEY`, and no key was available while
-this was written. Running it is one command:
+**The end-to-end four-outcome scores are not in this document, because they were
+not run when it was written.** They have been since, on **both** profiles:
+
+| profile | backend | embedder | grader | score | file |
+|---|---|---|---|---|---|
+| `local` | files (BM25) | fastembed 384d | off | **100%** | `harness_output.json` |
+| `dev` | Supabase (`ts_rank_cd` + pgvector) | Gemini 768d | **on** | **100%** | `harness_dev.json` |
+
+The `dev` column is the one that was missing, and running it was not a
+formality. It scored 95% on the first attempt: the CRAG grader — the one stage
+that is on in the deployed profile and off in every other measurement — was
+being shown `doc.text[:900]`, so it dropped a policy document whose answer began
+at character 1258 and cited a rollback runbook that mentioned the term in
+passing instead. The grader judged correctly on the evidence it was given; the
+excerpt was the defect. Fixed, and `dev` now matches `local` question for
+question.
+
+The remaining caveat has not moved: this is a self-authored corpus of twelve
+documents scored on twenty questions I also wrote. Treat it as provisional; §6
+says why.
+
+The harness is built and tested (`tests/test_scoring.py`). Running it is one
+command:
 
 ```bash
 python -m eval.harness --compare lexical,hybrid,baseline --delay 30 --out harness_output.json
@@ -277,7 +296,10 @@ documents my retriever happens to be good at.
 
 **`ts_rank_cd` and `rank_bm25` are not the same scorer.** The gate's lexical
 floor is calibrated against BM25. The equivalence test between the two backends
-exists to catch drift, and it has **not been run** — see §7.
+exists to catch drift; it now runs against live Postgres (§7). What closed the
+gap was not the test but the gate: it scores against the locally-built BM25
+index on *both* backends, so the calibrated floor means the same thing either
+side of the swap. The test guards that property rather than establishing it.
 
 **Free-tier fragility.** `qwen/qwen3.8-27b` is a preview model that can vanish;
 Groq's 8k TPM allows about two questions a minute; a Supabase free project pauses
@@ -323,19 +345,25 @@ uses, not similarity on prose.
 Three things are built and unit-tested but have **never executed against the real
 service**, because no credentials were available:
 
-1. **The SQL migrations have not been run.** They need Postgres with pgvector.
-   Covered instead by tests asserting the filter clauses textually — aimed
-   squarely at deletion of the `service is null` disjunct, which would silently
-   break every policy question.
-2. **The `FileStore` / `SupabaseStore` equivalence test is skipped**, not passing.
-   It is the real check that the migration is behaviour-preserving, and a skip is
-   not a pass.
+1. ~~**The SQL migrations have not been run.**~~ They have now, against a live
+   Supabase project with pgvector. Running them found a real defect:
+   `websearch_to_tsquery` is conjunctive, so `ts_rank_cd` returned `0.0` for
+   every realistic question and the lexical arm retrieved nothing. Fixed in
+   `0004_lexical_or_search.sql`. The textual tests on the filter clauses remain,
+   and now follow whichever migration currently defines `hybrid_search`.
+2. ~~**The `FileStore` / `SupabaseStore` equivalence test is skipped**, not
+   passing.~~ It passes, against live Postgres, marked `@pytest.mark.network`.
+   It asserts "no worse" rather than "identical", because BM25 and `ts_rank_cd`
+   are different algorithms — what must hold is that the swap loses no document
+   and preserves the refusal behaviour exactly. Postgres currently does *better*
+   on Q14.
 3. **Cloudinary upload and ingestion have not round-tripped.** The signature
    algorithm is pinned against a hand-computed SHA-1 vector, because Cloudinary
    answers a wrong signature with a bare 401 and no hint which of parameter set,
    sort order or empty-value handling was wrong.
 
-260 tests pass offline with no credentials and no network.
+320 tests pass offline with no credentials and no network, enforced by CI
+(`.github/workflows/test.yml`) on a runner with no secrets configured.
 
 ---
 

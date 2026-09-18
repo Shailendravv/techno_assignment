@@ -30,6 +30,7 @@ from agent.core.retrieve import (
     build_index,
     dense_search,
     metadata_filter,
+    passes_gate,
     passes_hybrid_gate,
     rrf_fuse,
 )
@@ -284,12 +285,27 @@ def test_corpus_coverage_binds_even_when_the_dense_score_is_high(lexical_index, 
     assert "content words" in why
 
 
+# The query below clears the coverage floor at 80% - every word of it appears
+# somewhere in the corpus - while RB-011 scores 0.00 per term against it,
+# because that document genuinely is not about any of those words. That is what
+# makes it the right candidate for exercising the dense-override branch.
+#
+# These two tests used to fabricate `lexical_score=0.0` on a document that
+# really scores 0.50. They passed, and they were measuring nothing: the gate
+# now reads the corpus rather than whatever the caller attached, so a
+# fabricated score no longer steers it. Asserting on a real zero is both the
+# only way to reach this branch and a better test than the one it replaces.
+_LEXICALLY_SILENT_DOC = "RB-011"
+_COVERED_BUT_UNMATCHED = "checkout-api deploy rollback previous version"
+
+
 def test_a_strong_dense_score_can_admit_a_question_lexical_would_reject(
     lexical_index, cfg, docs
 ):
     """The vocabulary-mismatch path this phase exists for."""
-    spec = analyze_query("checkout-api deploy rollback previous version", docs)
-    candidate = Candidate(doc=docs[0], lexical_score=0.0, dense_score=0.95)
+    spec = analyze_query(_COVERED_BUT_UNMATCHED, docs)
+    doc = next(d for d in docs if d.doc_id == _LEXICALLY_SILENT_DOC)
+    candidate = Candidate(doc=doc, dense_score=0.95)
 
     passed, why = passes_hybrid_gate(spec, [candidate], lexical_index, cfg)
 
@@ -298,8 +314,9 @@ def test_a_strong_dense_score_can_admit_a_question_lexical_would_reject(
 
 
 def test_neither_signal_clearing_its_floor_is_rejected(lexical_index, cfg, docs):
-    spec = analyze_query("checkout-api deploy rollback previous version", docs)
-    candidate = Candidate(doc=docs[0], lexical_score=0.0, dense_score=0.1)
+    spec = analyze_query(_COVERED_BUT_UNMATCHED, docs)
+    doc = next(d for d in docs if d.doc_id == _LEXICALLY_SILENT_DOC)
+    candidate = Candidate(doc=doc, dense_score=0.1)
 
     passed, why = passes_hybrid_gate(spec, [candidate], lexical_index, cfg)
 
@@ -441,3 +458,86 @@ def test_dense_scores_do_not_separate_answerable_from_unanswerable(
         "means the cosine floor can become a real discriminator - but the "
         "write-up currently reports the opposite, so update both together."
     )
+
+
+# ---------------------------------------------------------------------------
+# The gate must not depend on which backend ranked the candidates.
+#
+# This is the regression that shipped: `lexical_floor` is calibrated against
+# `rank_bm25`, whose scores land around 2-6 on this corpus, but the gate read
+# the score the *store* had attached. The SQL backend attaches `ts_rank_cd`,
+# which is around 0.01 and was 0.0 outright because the query was conjunctive.
+# So the lexical branch of the gate could never be taken on Postgres, every
+# question fell through to a cosine floor deliberately set never to fire, and
+# the deployed system refused answerable questions - while the harness, which
+# runs the file backend, reported 100%.
+# ---------------------------------------------------------------------------
+
+def _gate_inputs(question: str):
+    """Rank and filter a real question, the way `retrieve_node` does."""
+    cfg = load_settings("local")
+    docs = load_corpus(cfg.corpus_dir)
+    index = build_index(docs)
+    spec = analyze_query(question, docs)
+    ranked = bm25_search(index, spec, cfg.retrieval.bm25_top_k)
+    kept = metadata_filter(spec, ranked, cfg.retrieval.final_top_k)
+    return spec, kept, index, cfg.retrieval
+
+
+def test_the_gate_ignores_the_scale_of_the_scores_the_store_attached():
+    """A store that scores on a different scale must not change the verdict."""
+    question = "checkout-api is running hot on CPU - what should I check first?"
+    spec, kept, index, retrieval = _gate_inputs(question)
+
+    passed_with_bm25, _ = passes_gate(spec, kept, index, retrieval)
+
+    # Exactly what the SQL backend used to hand over: the right documents, in
+    # the right order, carrying scores from a different scorer.
+    for candidate in kept:
+        candidate.lexical_score = 0.0
+
+    passed_with_foreign_scores, why = passes_gate(spec, kept, index, retrieval)
+
+    assert passed_with_bm25 is True
+    assert passed_with_foreign_scores is True, (
+        f"the gate followed the store's score instead of the corpus: {why}"
+    )
+
+
+def test_the_gate_is_not_moved_by_presentation_order():
+    """`_prefer_specific` reorders kept candidates for display.
+
+    It documents itself as a tie-break rather than a score adjustment, but the
+    gate used to read element `[0]`, so the reordering moved the number a
+    threshold was compared against. Scoring the best survivor rather than the
+    first one makes that independent.
+    """
+    question = "How do I safely roll back checkout-api?"
+    spec, kept, index, retrieval = _gate_inputs(question)
+
+    forwards, why_forwards = passes_gate(spec, list(kept), index, retrieval)
+    backwards, why_backwards = passes_gate(spec, list(reversed(kept)), index, retrieval)
+
+    assert forwards == backwards
+    assert why_forwards == why_backwards
+
+
+def test_a_zero_scoring_lexical_arm_does_not_smuggle_in_a_ranking():
+    """The SQL half of the same bug, asserted on the migration.
+
+    The old `lexical` CTE had no match predicate, so when every score was 0.0 it
+    still emitted all twelve documents ordered by `doc_id` - and RRF consumed
+    those alphabetical positions as though they were a ranking.
+    """
+    from agent.config import ROOT
+
+    migrations = ROOT / "supabase" / "migrations"
+    defining = sorted(
+        path
+        for path in migrations.glob("*.sql")
+        if "create or replace function hybrid_search"
+        in path.read_text(encoding="utf-8").lower()
+    )
+    sql = " ".join(defining[-1].read_text(encoding="utf-8").lower().split())
+
+    assert "a.fts @@ q.tsq" in sql

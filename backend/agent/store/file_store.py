@@ -13,7 +13,7 @@ and the evaluation harness runnable by anyone who clones this.
 
 from __future__ import annotations
 
-from agent.config import Settings, settings as default_settings
+from agent.config import Settings, current_settings
 from agent.core.corpus import load_corpus
 from agent.core.models import Candidate, Doc, QuerySpec
 from agent.core.retrieve import (
@@ -40,7 +40,7 @@ class FileStore:
     name = "files"
 
     def __init__(self, cfg: Settings | None = None):
-        self.cfg = cfg or default_settings
+        self.cfg = cfg or current_settings()
 
     def documents(self) -> tuple[Doc, ...]:
         return load_corpus(self.cfg.corpus_dir)

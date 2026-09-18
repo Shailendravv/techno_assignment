@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import time
 
-from agent.config import NO_MATCH_MESSAGE, Settings, settings as default_settings
+from agent.config import NO_MATCH_MESSAGE, Settings, current_settings
 from agent.graph import COMPILED
 from agent.state import new_state
 
@@ -61,7 +61,7 @@ def answer_question(
     harness run, which is the difference between reading twenty separate
     questions and reading the run that asked them.
     """
-    cfg = cfg or default_settings
+    cfg = cfg or current_settings()
 
     if not question or not question.strip():
         result = {
@@ -143,7 +143,22 @@ def answer_question(
 
         # Cache the refusal too. A `no_match` is a considered result, and
         # re-deriving it costs exactly what deriving it did.
-        cache.put(question, result)
+        #
+        # But only when the pipeline actually reached a verdict. A `no_match`
+        # produced because the grader was unreachable, or because the model
+        # would not return JSON, is not a considered result - it is an outage
+        # wearing one. The cache has no TTL, so writing it stores a transient
+        # failure permanently against a question that has a real answer, and
+        # every later ask is served the outage. That happened during this
+        # project: `tests/conftest.py` records a run whose stubbed answers were
+        # written into the shared cache and then served to a real request.
+        if final.get("degraded"):
+            recorder.degrade(
+                "generate",
+                "answer not cached: the pipeline degraded rather than concluding",
+            )
+        else:
+            cache.put(question, result)
 
         observability.finish(
             root,
