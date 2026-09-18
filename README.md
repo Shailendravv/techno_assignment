@@ -109,7 +109,7 @@ curl -X POST localhost:8000/ask -H 'content-type: application/json' \
 entire test suite run offline:
 
 ```bash
-pytest -q                       # 329 tests, no network, no key
+pytest -q                       # 330 tests, no network, no key
 
 # Gate calibration, and the lexical-vs-hybrid measurement. Both retrieval-only:
 # free, deterministic, reproducible.
@@ -166,6 +166,31 @@ correct behaviour.
 
 The CLI, the HTTP API, and the evaluation harness all call this same function,
 so a harness score is evidence about what the deployed API will actually do.
+
+### The HTTP surface
+
+`app/` wraps that same function in FastAPI and adds nothing to the answer. Five
+routes, all described by `/docs`:
+
+| route | what it is for |
+|---|---|
+| `POST /ask` | The question. `explain: true` adds the per-stage trace; `model_role: "reasoner"` switches generation model |
+| `GET /health` | How this instance is *actually* configured: which store is mounted rather than which was requested, which embedder, and whether each credential is present — never what it is |
+| `GET /eval/latest` | The committed harness report, served from the repo. A real run makes twenty model calls against a two-a-minute tier, which is not something to do inside a request handler |
+| `POST /ingest/sign` | One signed, folder-scoped Cloudinary upload, so a large file never goes through Vercel's 4.5MB request cap. Authenticated — and a missing key returns **404**, so an unconfigured deployment does not advertise that the route exists |
+| `GET /` | Points at `/docs`. There is no bundled UI; `frontend/` is the client |
+
+**A `no_match` is a 200, not a 404.** The agent declining is a successful
+outcome, and signalling it as an error would invite clients to retry it or hide
+it.
+
+`POST /ask` is rate limited per client — `ASK_RATE_LIMIT_PER_MINUTE`, default
+20 — counted against the leftmost `x-forwarded-for` entry, because behind
+Vercel's proxy `request.client` is the proxy for every caller and would limit
+the whole world as one client. That entry is spoofable, which is acceptable for
+a quota guard and would not be for an authorisation decision, so it is used for
+nothing else. The quota being protected is Groq's 8k TPM, shared across everyone
+hitting the deployment.
 
 ---
 
@@ -266,7 +291,7 @@ supabase/migrations single-query hybrid search, in SQL
 baseline/           the no-retrieval control arm
 eval/               questions, harness, scorer, retrieval-only scorer
 runbooks/           RB-001.md .. RB-012.md
-tests/              329 tests, all offline
+tests/              330 tests, all offline
 
 ../frontend/        React + Vite single-page UI
 ../frontend/e2e/    Playwright: 18 hermetic, 3 @live

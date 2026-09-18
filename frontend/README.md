@@ -1,181 +1,179 @@
-# AI Chat Assistant Interface 🤖
+# Runbook Agent — web UI
 
-[![React](https://img.shields.io/badge/React-19-blue.svg)](https://react.dev/)
-[![Vite](https://img.shields.io/badge/Vite-8.0-646CFF.svg)](https://vitejs.dev/)
-[![TailwindCSS](https://img.shields.io/badge/Tailwind-4.0-38B2AC.svg)](https://tailwindcss.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+The React client for the agent in [`backend/`](../backend). One page, one input
+box: ask a question about the twelve operational runbooks and read the answer
+**next to the evidence for it** — which documents it cited, how confident it is,
+and the per-stage trace of how it got there.
 
-A complete, high-performance frontend architecture for an AI-driven chat application. This project features a modular design, sophisticated file upload capabilities (specifically for Excel processing), and a polished, accessibility-focused UI built with React 19 and Tailwind CSS 4.
+The interesting case is the one where the agent declines. A `no_match` comes
+back as a normal, successful answer, and this UI renders it as one — with the
+trace still expandable, because for a refusal the trace is the only thing that
+says *why*. Showing that as an error would be the wrong reading of a correct
+result.
 
----
-
-## 🚀 Tech Stack
-
-| Category | Technology | Purpose |
-| :--- | :--- | :--- |
-| **Core** | [React 19](https://react.dev/) | UI Library & Component Architecture |
-| **Build Tool** | [Vite 8](https://vitejs.dev/) | Ultra-fast development server & bundling |
-| **Styling** | [Tailwind CSS 4](https://tailwindcss.com/) | Utility-first CSS framework with native Vite support |
-| **State Management** | [TanStack Query v5](https://tanstack.com/query/latest) | Server-state management & API caching |
-| **Routing** | [React Router 7](https://reactrouter.com/) | Declarative client-side navigation |
-| **HTTP Client** | [Axios](https://axios-http.com/) | Promise-based API requests |
-| **Icons** | [React Icons](https://react-icons.github.io/react-icons/) | Unified icon system (Material, IonIcons) |
+> Run both halves together from the repo root with `./start.sh`. It installs
+> `node_modules` if they are missing or stale and serves this app on `:5173`
+> against the API on `:8000`. Everything below is the manual path.
 
 ---
 
-## ✨ Features
-
-- **Advanced Chat Interface**: Smooth message streaming simulation and state-aware input controls.
-- **Excel File Integration**: Robust support for attaching and uploading `.xlsx` files alongside text queries.
-- **Intelligent Feedback**: Real-time upload status, file badges, and clearable attachments.
-- **Sticky Architecture**: Backdrop-blur headers and gradient-masked input bars for a premium "glassmorphism" feel.
-- **Mock System**: Integrated mock API layer for development without backend dependencies.
-- **Responsive Design**: Mobile-first approach ensuring usability across all device sizes.
-- **Theme Optimization**: Custom `#f7f4f0` cream palette designed for reduced eye strain during long sessions.
-
----
-
-## 🏗️ Project Architecture Overview
-
-This project follows a **Modular Feature-Based Architecture** designed for scalability and maintainability.
-
-### 1. Component Strategy
-- **Atomic-ish Design**: Components are split into logical units. Large components like `ChatInterface` are refactored into focused sub-components like `Header` and `InputBar`.
-- **Props-Driven**: State is lifted to parent containers (`ChatInterface`) and passed down via props to ensure a single source of truth.
-
-### 2. State Flow
-- **Server State**: Managed exclusively by **TanStack Query**. This handles caching, loading states, and error handling for all API interactions.
-- **Local State**: Managed via React's `useState` for UI-specific logic (e.g., input values, file selection).
-
-### 3. API Communication Flow
-We use a **Service Layer Pattern**:
-1. **Components** trigger mutations via TanStack Query.
-2. **Mutations** call functions in `src/services/api.js`.
-3. **Services** use a pre-configured Axios instance to communicate with the backend.
-4. **Multipart Support**: Optimized for sending `FormData` containing both text and binary files.
-
-### 4. Folder Organization Philosophy
-The structure is designed to separate concerns:
-- `components/`: Pure UI and reusable logic.
-- `services/`: All outbound networking logic.
-- `pages/`: Layout-heavy route components.
-- `layouts/`: Global wrappers (navigation, sidebars).
-
----
-
-## 📁 Folder Structure
+## Quick start
 
 ```bash
-src/
- ├── assets/             # Static assets (images, global SVGs)
- ├── components/         # Modular UI components
- │    ├── ChatInterface  # Main chat logic & message rendering
- │    ├── Header         # Sticky top navigation
- │    └── InputBar       # Floating input field & file controls
- ├── hooks/              # Custom reusable React hooks
- ├── layouts/            # Page layout wrappers (e.g., MainLayout)
- ├── pages/              # Route-level components (e.g., Home)
- ├── services/           # API service layer (Axios instances)
- ├── utils/              # Helper functions & formatting logic
- ├── App.jsx             # Root application component
- ├── index.css           # Global styles & Tailwind directives
- └── main.jsx            # Entry point & Provider configuration
+npm install
+npm run dev             # http://localhost:5173
 ```
 
----
+The app needs the backend running on `:8000` to answer anything:
 
-## 🛠️ Getting Started
+```bash
+cd ../backend && uvicorn app.main:app --reload
+```
 
-### Prerequisites
-- Node.js (v18.0.0 or higher)
-- npm or yarn
+The backend must allow this origin — `CORS_ORIGINS` defaults to
+`http://localhost:5173,http://127.0.0.1:5173`, so the default pairing works
+unchanged. See [`backend/.env.example`](../backend/.env.example).
 
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   ```
-2. Navigate to the frontend directory:
-   ```bash
-   cd mk_proj_2/frontend
-   ```
-3. Install dependencies:
-   ```bash
-   npm install
-   ```
+### Scripts
 
-### Available Scripts
-
-| Command | Description |
+| Command | What it does |
 | :--- | :--- |
-| `npm run dev` | Runs the app in development mode with HMR |
-| `npm run build` | Builds the app for production in the `dist` folder |
-| `npm run lint` | Runs ESLint to check for code quality issues |
-| `npm run preview` | Previews the production build locally |
+| `npm run dev` | Vite dev server with HMR |
+| `npm run build` | Production build into `dist/` |
+| `npm run preview` | Serve the built bundle locally |
+| `npm run lint` | ESLint |
+| `npm run test:e2e` | **18 Playwright tests, `POST /ask` stubbed.** No backend, no API key. This is what CI runs |
+| `npm run test:e2e:live` | 3 `@live` tests through the real pipeline. Needs the API up, and spends Groq quota |
+| `npm run test:e2e:ui` | The Playwright UI runner |
 
----
-
-## 🌐 Environment Variables
-
-Create a `.env` file in the root directory:
+### Environment
 
 ```env
-# API Configuration
 VITE_API_URL=http://localhost:8000
 ```
 
-*Note: All environment variables must be prefixed with `VITE_` to be accessible in the codebase.*
+The only variable. `src/services/api.js` falls back to `http://localhost:8000`
+if it is unset, so a local checkout works with no `.env` at all. Vite only
+exposes variables prefixed `VITE_`.
 
 ---
 
-## 📖 API Reference
+## Stack
 
-Talks to the FastAPI backend in `backend/` (run with `uvicorn app.main:app --reload`
-from `backend/`, default port `8000`). The backend must allow this app's origin via
-its `CORS_ORIGINS` setting — see `backend/.env.example`.
+| Layer | Choice |
+| :--- | :--- |
+| UI | [React 19](https://react.dev/) |
+| Build | [Vite 8](https://vitejs.dev/) |
+| Styling | [Tailwind CSS 4](https://tailwindcss.com/) via `@tailwindcss/vite` — no PostCSS config file |
+| Server state | [TanStack Query v5](https://tanstack.com/query/latest) (`useMutation`) |
+| Routing | [React Router 7](https://reactrouter.com/) — one route, in place for a second |
+| HTTP | [Axios](https://axios-http.com/), one configured instance |
+| Markdown | [react-markdown](https://github.com/remarkjs/react-markdown) + [remark-gfm](https://github.com/remarkjs/remark-gfm) |
+| Icons | [React Icons](https://react-icons.github.io/react-icons/) (IonIcons) |
+| E2E | [Playwright](https://playwright.dev/), Chromium |
 
-### Ask a question
-**Endpoint**: `POST /ask` (base URL from `VITE_API_URL`)
-**Content-Type**: `application/json`
+---
 
-| Field | Type | Description |
+## Layout
+
+```bash
+src/
+ ├── main.jsx                  entry; QueryClientProvider + StrictMode
+ ├── App.jsx                   Router -> MainLayout -> "/" -> Home
+ ├── index.css                 Tailwind entry and global styles
+ ├── layouts/MainLayout.jsx    global wrapper
+ ├── pages/Home.jsx            the single route
+ ├── components/
+ │    ├── ChatInterface.jsx    all the state: messages, the mutation, rendering
+ │    ├── Header.jsx           sticky, backdrop-blurred title bar
+ │    └── InputBar.jsx         fixed composer; presentational, fully controlled
+ ├── services/api.js           axios instance + askQuestion()
+ └── assets/
+e2e/
+ ├── chat.spec.js              18 hermetic tests, API stubbed
+ ├── fixtures.js               stub responses copied from real /ask output
+ └── live.spec.js              3 @live tests against a running backend
+```
+
+State lives in `ChatInterface`. `InputBar` and `Header` take props and own
+nothing — the message list has a single source of truth, and the composer is
+controlled from the same place the mutation is.
+
+Two things in there are deliberate and easy to undo by accident:
+
+- **Message ids come from `crypto.randomUUID()`**, not `Date.now()`. Two
+  messages landing in the same millisecond collide, and React silently drops one
+  of the duplicate keys from the list.
+- **Every `setMessages` is a functional update.** Reading `messages` from the
+  render closure loses a message when two sends land before React re-renders.
+  There is an e2e test pinning this.
+
+---
+
+## Talking to the API
+
+`POST /ask`, JSON in, JSON out — `src/services/api.js`.
+
+| Field | Type | Notes |
 | :--- | :--- | :--- |
-| `question` | String | The user's question, 1-2000 chars |
-| `model_role` | String | `"generator"` (default) or `"reasoner"` |
-| `explain` | Boolean | Include the per-stage trace (default `false`) |
+| `question` | String | 1–2000 characters |
+| `explain` | Boolean | This UI always sends `true` |
+| `model_role` | String | `"generator"` (default) or `"reasoner"`; not currently sent |
 
-**Response Format**:
 ```json
 {
-  "answer": "...",
+  "answer": "Check the following, in order: ...",
   "cited_doc_ids": ["RB-001"],
   "confidence": "high",
   "elapsed_ms": 812,
-  "trace": [],
-  "llm_calls": 1
+  "trace": ["analyze: service=checkout-api ...", "gate: pass ..."],
+  "llm_calls": 3
 }
 ```
 
-`confidence` is one of `high | medium | low | no_match`. `no_match` (with an
-empty `cited_doc_ids`) is a normal, successful response — the agent declining
-to answer rather than guessing — and should be rendered as such, not as an
-error.
+`confidence` is one of `high | medium | low | no_match`, rendered as a coloured
+pill beside the cited document ids. `trace` goes into a collapsed **"Why this
+answer"** disclosure along with the model-call count — which is `0` for a
+question the gate stopped, and worth seeing.
+
+This mirrors `backend/app/schemas.py::AskResponse`. If that contract changes,
+`e2e/fixtures.js` goes stale without failing anything — which is exactly what
+`live.spec.js` exists to catch.
 
 ---
 
-## 🤝 Contributing
+## Tests
 
-1. **Feature Branches**: Use `feature/` or `fix/` prefixes.
-2. **Linting**: Ensure `npm run lint` passes before committing.
-3. **Architecture**: Maintain the service layer pattern for all new API integrations.
+The suite splits the same way the backend's pytest suite does, and for the same
+reason: almost everything worth asserting about this UI is a property of the
+frontend alone, and stubbing the API makes those assertions fast, deterministic,
+and runnable with no secrets.
+
+```bash
+npm run test:e2e        # 18 tests, hermetic. Playwright starts Vite itself
+npm run test:e2e:live   # 3 tests, real backend on :8000, real Groq quota
+```
+
+What the hermetic suite pins: that the trace is requested at all; that a refusal
+renders as an answer rather than an error and cites nothing while still
+explaining itself; that markdown renders instead of showing raw `**` and `1.`
+characters; that the answer region is announced to assistive technology
+(`role="log"`, `aria-live="polite"`) and the icon-only send button is labelled;
+that an empty question cannot be sent; that Enter sends and the input clears;
+and that a 503 surfaces instead of hanging, leaving the page usable afterwards.
+
+Playwright starts the dev server itself and reuses one that is already running,
+so a dev session is not killed and restarted on every run. Point it elsewhere
+with `E2E_BASE_URL`.
 
 ---
 
-## 📄 License
+## Deployment
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Builds to a static `dist/` — its own Vercel project, or any static host. Set
+`VITE_API_URL` to the deployed API's origin at **build** time (Vite inlines it;
+changing it later means rebuilding), and add that host to the backend's
+`CORS_ORIGINS`.
 
----
-
-**Maintained by**: [Senior Frontend Team]  
-**Last Updated**: May 2026
+See the [root README](../README.md) for the backend, the retrieval design, and
+the evaluation results.
