@@ -165,6 +165,11 @@ class SupabaseStore:
                     with recorder.stage("embed_query") as ledger:
                         vector = get_embedder(cfg).embed_query(query)
                         ledger.detail(f"{cfg.embedding.signature} dims={len(vector)}")
+                        ledger.io(
+                            input={"query": query},
+                            output={"dims": len(vector)},
+                            embedder=cfg.embedding.signature,
+                        )
                 except Exception as exc:  # noqa: BLE001 - degrade to lexical
                     recorder.degrade(
                         "dense_retrieve",
@@ -196,6 +201,28 @@ class SupabaseStore:
         with recorder.stage("sparse_retrieve") as ledger:
             rows = self.rpc("hybrid_search", params)
             ledger.detail(f"hybrid_search rpc, pre-filtered, {len(rows)} rows")
+            # The vector is left out deliberately - it is 768 floats that
+            # render as noise - but everything the SQL was actually given is
+            # here, because "why did the database return these rows" is not
+            # answerable from the result set alone.
+            ledger.io(
+                input={
+                    "query_text": query,
+                    "service": spec.service,
+                    "failure_mode": spec.failure_mode,
+                    "date": spec.date,
+                    "match_count": params["match_count"],
+                    "has_query_vector": vector is not None,
+                },
+                output=[
+                    {
+                        "doc_id": row.get("doc_id"),
+                        "fused": round(float(row.get("fused_score") or 0.0), 5),
+                    }
+                    for row in rows
+                ],
+                method="hybrid_search rpc (pgvector)",
+            )
 
         if vector is not None:
             recorder.ran("dense_retrieve", detail="fused in-database (pgvector)")

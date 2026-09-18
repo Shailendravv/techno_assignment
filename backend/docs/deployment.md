@@ -81,7 +81,7 @@ is a 500:
 | Supabase | falls back to `FileStore` and the checked-in corpus |
 | embedder (no Gemini key) | falls back to lexical-only retrieval, and says so in the trace |
 | Groq key | retrieval and every `no_match` path still work; `/ask` returns 503 with the reason |
-| Langfuse | traces are not exported; the per-stage trace is still returned |
+| Langfuse | no client is constructed and no network call is made; the per-stage trace is still returned ([Observability](architecture/observability.md)) |
 | answer cache | every request is a miss |
 
 `/health` reports the store **actually mounted** alongside the one requested.

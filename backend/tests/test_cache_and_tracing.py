@@ -18,9 +18,9 @@ from dataclasses import replace
 
 import pytest
 
+from agent import observability
 from agent.cache import NullCache, cache_key, get_cache, normalise_question
 from agent.config import Supabase, load_settings
-from agent.observability import build_payload, enabled, export_trace
 
 
 @pytest.fixture
@@ -189,84 +189,163 @@ def test_the_null_cache_never_hits():
 # --------------------------------------------------------------------------
 # Tracing.
 # --------------------------------------------------------------------------
+# What these check is not "does Langfuse receive a trace" - that needs a
+# project and a network, and it is verified by running the thing. They check
+# the two properties the pipeline depends on: that tracing is off unless it is
+# configured, and that no failure of it can reach the caller.
 
-def test_tracing_is_off_without_credentials(monkeypatch):
+
+def test_tracing_is_off_without_credentials(cfg, monkeypatch):
     """The default configuration, and the whole test suite, makes no network
     calls to an observability backend."""
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_TRACING_ENABLED", raising=False)
 
-    assert enabled() is False
-
-
-def test_exporting_without_credentials_is_a_no_op(cfg, monkeypatch):
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-
-    assert export_trace("q", {"confidence": "high"}, [], 0, 12, cfg) is False
+    blank = replace(cfg, langfuse_public_key="", langfuse_secret_key="")
+    assert observability.enabled(blank) is False
+    assert observability.client(blank) is None
 
 
-def test_an_unreachable_backend_never_raises(cfg, monkeypatch):
+def test_tracing_can_be_turned_off_without_deleting_the_keys(monkeypatch):
+    """Keys are shared between the app, the CLI and this suite. Turning
+    tracing off must not mean editing credentials."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENABLED", "false")
+
+    assert observability.enabled() is False
+
+
+def test_an_unconfigured_run_yields_working_no_op_handles(cfg):
+    """Call sites never branch on whether tracing is on, so the handles have
+    to behave when it is off."""
+    with observability.trace_run("q", cfg) as root:
+        root.update(output={"answer": "x"})
+        observability.finish(
+            root, {"confidence": "high", "cited_doc_ids": ["RB-001"]},
+            llm_calls=1, elapsed_ms=10,
+        )
+
+    with observability.stage_observation("generate") as observation:
+        observation.update(output="anything")
+
+    with observability.generation(
+        role="generator", model="m", messages=[], attempt=1,
+        temperature=0.0, max_tokens=10,
+    ) as generation:
+        generation.update(output="anything", usage_details={"input": 1})
+
+    assert observability.tracing() is False
+
+
+def test_a_broken_client_never_reaches_the_caller(cfg, monkeypatch):
     """Losing a trace is an acceptable cost; losing an answer is not."""
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
-    monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:9")
+    class Exploding:
+        def start_as_current_observation(self, **_):
+            raise RuntimeError("langfuse is having a bad day")
 
-    assert export_trace("q", {"confidence": "high"}, ["analyze: x"], 1, 5, cfg) is False
+        def create_event(self, **_):
+            raise RuntimeError("still bad")
 
+        def flush(self):
+            raise RuntimeError("worse")
 
-def test_the_payload_carries_one_span_per_pipeline_stage(cfg):
-    trace = ["analyze: x", "retrieve: y", "gate: REJECT - z", "finalize: no_match"]
-    payload = build_payload("q", {"confidence": "no_match"}, trace, 0, 40, cfg)
+    monkeypatch.setattr(observability, "client", lambda *_, **__: Exploding())
 
-    spans = [e for e in payload["batch"] if e["type"] == "span-create"]
-    assert len(spans) == len(trace)
-    assert "analyze" in spans[0]["body"]["name"]
+    with observability.trace_run("q", cfg) as root:
+        observability.finish(root, {"confidence": "no_match"}, llm_calls=0, elapsed_ms=1)
 
-
-def test_every_span_belongs_to_the_one_trace(cfg):
-    payload = build_payload("q", {"confidence": "high"}, ["a: 1", "b: 2"], 1, 10, cfg)
-
-    trace_event = next(e for e in payload["batch"] if e["type"] == "trace-create")
-    trace_id = trace_event["body"]["id"]
-
-    assert all(
-        e["body"]["traceId"] == trace_id
-        for e in payload["batch"]
-        if e["type"] == "span-create"
-    )
+    observability.flush()  # must not raise even though the client does
 
 
-def test_declined_answers_are_tagged_so_they_can_be_found(cfg):
-    """"Show me every question we declined" is the query worth having - it is
-    the outcome this design exists to produce."""
-    payload = build_payload(
-        "q", {"confidence": "no_match", "cited_doc_ids": []}, [], 0, 10, cfg
-    )
-    tags = payload["batch"][0]["body"]["tags"]
+def test_stages_outside_a_run_create_no_orphan_traces(cfg, monkeypatch):
+    """An observation with no parent becomes its own one-span trace. A stage
+    recorded outside a run - in ingest, or in a unit test - must not litter the
+    project with them."""
+    created = []
 
-    assert "declined" in tags
-    assert "confidence:no_match" in tags
+    class Recording:
+        def start_as_current_observation(self, **kwargs):
+            created.append(kwargs)
+            raise AssertionError("should not have been called")
 
+    monkeypatch.setattr(observability, "client", lambda *_, **__: Recording())
 
-def test_answered_questions_are_tagged_separately(cfg):
-    payload = build_payload(
-        "q", {"confidence": "high", "cited_doc_ids": ["RB-001"]}, [], 1, 10, cfg
-    )
+    with observability.stage_observation("generate") as observation:
+        observation.update(output="x")
 
-    assert "answered" in payload["batch"][0]["body"]["tags"]
-
-
-def test_the_payload_records_which_configuration_produced_it(cfg):
-    """A trace you cannot attribute to an arm is a trace you cannot compare."""
-    payload = build_payload("q", {"confidence": "high"}, [], 1, 10, cfg)
-    metadata = payload["batch"][0]["body"]["metadata"]
-
-    assert metadata["retrieval_mode"] == cfg.retrieval.mode
-    assert metadata["profile"] == "local"
+    assert created == []
 
 
-def test_the_payload_is_json_serialisable(cfg):
-    import json
+def test_every_query_stage_is_represented_in_a_trace():
+    """A stage added to the ledger without a Langfuse mapping would run, log,
+    and be invisible in the trace tree. `llm_gateway` is the one deliberate
+    exclusion: `agent/llm.py` emits a `generation` for the same round trip, and
+    two observations for one call double-count cost."""
+    from agent.stages import QUERY_STAGES, Status
 
-    json.dumps(build_payload("q", {"confidence": "high"}, ["a: 1"], 1, 10, cfg))
+    expected = {
+        stage.name
+        for stage in QUERY_STAGES
+        if stage.declared is not Status.NOT_IMPLEMENTED
+    } - {"llm_gateway"}
+
+    assert expected <= set(observability.STAGE_OBSERVATIONS)
+
+
+def test_observation_types_are_ones_langfuse_accepts():
+    """The type is what makes a retrieval step filterable as retrieval. A typo
+    would be accepted locally and be wrong in the UI."""
+    valid = {
+        "span", "generation", "agent", "tool", "chain",
+        "retriever", "evaluator", "embedding", "guardrail", "event",
+    }
+
+    for name, as_type in observability.STAGE_OBSERVATIONS.values():
+        assert as_type in valid, f"{name} has an unknown observation type {as_type}"
+
+
+def test_observation_names_are_stable_and_low_cardinality():
+    """Langfuse treats a name as an API: evaluators target it, dashboards group
+    by it. A name carrying a run-specific value silently breaks all of them."""
+    for name, _ in observability.STAGE_OBSERVATIONS.values():
+        assert name == name.lower()
+        assert " " not in name
+        assert not any(char.isdigit() for char in name)
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "gsk_abcdefghijklmnopqrstuvwx",
+        "sk-abcdefghijklmnopqrstuvwx",
+        "AIzaSyABCDEFGHIJKLMNOPQRSTUV",
+    ],
+)
+def test_credentials_are_redacted_before_they_leave_the_process(secret):
+    """Enabling tracing must not turn a key pasted into a question into a key
+    sitting in a third party's database."""
+    masked = observability.mask(data=f"my key is {secret} please help")
+
+    assert secret not in masked
+    assert "[redacted]" in masked
+
+
+def test_masking_reaches_into_nested_structures():
+    payload = {
+        "messages": [{"role": "user", "content": "mail me at ops@example.com"}],
+        "count": 3,
+    }
+    masked = observability.mask(data=payload)
+
+    assert "ops@example.com" not in str(masked)
+    assert masked["count"] == 3
+
+
+def test_masking_leaves_an_ordinary_question_alone():
+    """The question is the trace input. A masker aggressive enough to redact it
+    would leave a trace nobody can read."""
+    question = "What is the rollback procedure for payments-api?"
+
+    assert observability.mask(data=question) == question

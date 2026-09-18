@@ -47,6 +47,7 @@ from agent.core.retrieve import (
     passes_gate,
     passes_hybrid_gate,
 )
+from agent import observability
 from agent.nodes.grade import grade_candidates, rewrite_query
 from agent.nodes.ground import ground
 from agent.stages import current_recorder
@@ -98,6 +99,17 @@ def analyze_node(state: AgentState) -> dict:
         # over a synonym table, not an LLM rewriting the question. The LLM
         # enhancement is stage 17, and only on the corrective loop.
         ledger.detail(f"rule_based; {detail}")
+        ledger.io(
+            input={"query": query},
+            output={
+                "service": spec.service,
+                "failure_mode": spec.failure_mode,
+                "intent": spec.intent,
+                "date": spec.date,
+                "unknown_service": spec.unknown_service,
+            },
+            method="rule_based",
+        )
 
     return {"spec": spec, "trace": [f"analyze: {detail}"]}
 
@@ -128,27 +140,74 @@ def retrieve_node(state: AgentState) -> dict:
     store = get_store(cfg)
     recorder = current_recorder()
 
-    # Stages 10 and 12-14 are recorded inside the store, because which of them
-    # run is the store's decision - the SQL backend fuses in one statement.
-    ranked, trace = store.retrieve(spec, _query(state), cfg)
-    index = store.lexical_index()
+    # One `retriever` observation over the whole of retrieval, and the four
+    # declared stages inside it. They are separate stages because they are
+    # separately skippable - the SQL backend fuses in one statement, the
+    # lexical profile never embeds - but in a trace tree they are one step, and
+    # reading them as five siblings of the generation reads the pipeline wrong.
+    with observability.observation(
+        "retrieve-documents",
+        as_type="retriever",
+        input={"query": _query(state), "mode": retrieval.mode},
+    ) as retrieval_span:
+        # Stages 10 and 12-14 are recorded inside the store, because which of
+        # them run is the store's decision.
+        ranked, trace = store.retrieve(spec, _query(state), cfg)
+        index = store.lexical_index()
 
-    with recorder.stage("relevance_filter") as ledger:
-        kept = metadata_filter(spec, ranked, retrieval.final_top_k)
+        with recorder.stage("relevance_filter") as ledger:
+            kept = metadata_filter(spec, ranked, retrieval.final_top_k)
 
-        # Which gate depends on whether the dense arm actually contributed, not
-        # on what the profile asked for. A hybrid run that silently fell back to
-        # lexical must be gated as lexical, or it would be held to a floor no
-        # candidate has a score for.
-        dense_ran = any(c.dense_score > 0.0 for c in ranked)
-        gate = passes_hybrid_gate if dense_ran else passes_gate
-        passed, why = gate(spec, kept, index, retrieval)
+            # Which gate depends on whether the dense arm actually contributed,
+            # not on what the profile asked for. A hybrid run that silently fell
+            # back to lexical must be gated as lexical, or it would be held to a
+            # floor no candidate has a score for.
+            dense_ran = any(c.dense_score > 0.0 for c in ranked)
+            gate = passes_hybrid_gate if dense_ran else passes_gate
+            passed, why = gate(spec, kept, index, retrieval)
 
-        ledger.detail(
-            f"kept={[c.doc_id for c in kept]} "
-            f"dropped={len([c for c in ranked if c.verdict == 'dropped'])} "
-            f"gate={'pass' if passed else 'REJECT'} ({why}) "
-            f"via={'hybrid' if dense_ran else 'lexical'}"
+            ledger.detail(
+                f"kept={[c.doc_id for c in kept]} "
+                f"dropped={len([c for c in ranked if c.verdict == 'dropped'])} "
+                f"gate={'pass' if passed else 'REJECT'} ({why}) "
+                f"via={'hybrid' if dense_ran else 'lexical'}"
+            )
+            # The gate's verdict and its reason, as the observation's output.
+            # This is the step that decides whether any document is ever shown
+            # to a model, so "why did it refuse" should be readable without
+            # opening a child span.
+            ledger.io(
+                input={
+                    "candidates": [c.doc_id for c in ranked],
+                    "filter": {
+                        "service": spec.service,
+                        "failure_mode": spec.failure_mode,
+                    },
+                },
+                output={
+                    "passed": passed,
+                    "reason": why,
+                    "kept": [c.doc_id for c in kept],
+                    "dropped": [
+                        {"doc_id": c.doc_id, "reason": c.reason}
+                        for c in ranked
+                        if c.verdict == "dropped"
+                    ],
+                },
+                gate="hybrid" if dense_ran else "lexical",
+            )
+
+        retrieval_span.update(
+            output=[
+                {
+                    "doc_id": c.doc_id,
+                    "title": c.doc.title,
+                    "lexical_score": round(c.lexical_score, 4),
+                    "dense_score": round(c.dense_score, 4),
+                }
+                for c in kept
+            ],
+            metadata={"ranked": len(ranked), "kept": len(kept), "gate_passed": passed},
         )
 
     trace.insert(
@@ -181,6 +240,14 @@ def grade_node(state: AgentState) -> dict:
     with recorder.stage("relevance_grade") as ledger:
         kept, reason, calls = grade_candidates(state["question"], candidates, cfg=cfg)
         ledger.detail(f"kept={[c.doc_id for c in kept]} llm_calls={calls} - {reason}")
+        ledger.io(
+            input={
+                "question": state["question"],
+                "candidates": [c.doc_id for c in candidates],
+            },
+            output={"relevant": [c.doc_id for c in kept], "reason": reason},
+            llm_calls=calls,
+        )
 
     dropped = [c.doc_id for c in candidates if c.doc_id not in {k.doc_id for k in kept}]
     trace = [
@@ -201,6 +268,12 @@ def rewrite_node(state: AgentState) -> dict:
         rewritten, calls = rewrite_query(state["question"], cfg=cfg)
         ledger.detail(
             f"attempt {state.get('rewrites', 0) + 1}/{cfg.max_rewrites} -> {rewritten!r}"
+        )
+        ledger.io(
+            input={"question": state["question"]},
+            output={"search_query": rewritten},
+            attempt=state.get("rewrites", 0) + 1,
+            budget=cfg.max_rewrites,
         )
 
     return {
@@ -229,6 +302,19 @@ def ground_node(state: AgentState) -> dict:
         ledger.detail(
             f"role={state.get('model_role', 'generator')} cited={cited or []} "
             f"invented={invented or []} llm_calls={calls}"
+        )
+        # `invented` is the reason this is worth carrying into Langfuse: a
+        # citation the model made up and we discarded is invisible in the
+        # answer, and it is the single most useful thing to be able to filter
+        # a month of traces by.
+        ledger.io(
+            input={
+                "question": state["question"],
+                "documents": [c.doc_id for c in candidates],
+            },
+            output={"answer": answer, "cited_doc_ids": cited or []},
+            invented_citations=invented or [],
+            llm_calls=calls,
         )
 
     trace = [f"ground: model cited {cited or 'nothing'}"]

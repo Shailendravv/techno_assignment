@@ -108,6 +108,17 @@ class FileStore:
                 + (", ".join(f"{c.doc_id}({c.lexical_score:.1f})" for c in lexical[:3])
                    or "nothing")
             )
+            # The ranked list, as the observation's output. A retrieval step
+            # whose trace shows a duration and nothing retrieved cannot answer
+            # the only question anybody opens it to ask.
+            ledger.io(
+                input={"query": query, "top_k": retrieval.bm25_top_k},
+                output=[
+                    {"doc_id": c.doc_id, "score": round(c.lexical_score, 4)}
+                    for c in lexical
+                ],
+                method="bm25",
+            )
 
         trace: list[str] = []
 
@@ -137,6 +148,15 @@ class FileStore:
         with recorder.stage("embed_query") as ledger:
             vector = get_embedder(cfg).embed_query(query)
             ledger.detail(f"{cfg.embedding.signature} dims={len(vector)}")
+            # The text, not the vector: 384 floats render as noise and cost
+            # payload. What a reader needs is which query was embedded, and by
+            # which model - the signature is what makes an index built with one
+            # embedder and queried by another findable after the fact.
+            ledger.io(
+                input={"query": query},
+                output={"dims": len(vector)},
+                embedder=cfg.embedding.signature,
+            )
 
         with recorder.stage("dense_retrieve") as ledger:
             dense = dense_search(dense_index, vector, retrieval.dense_top_k)
@@ -154,6 +174,15 @@ class FileStore:
                 + (", ".join(f"{c.doc_id}({c.dense_score:.2f})" for c in dense[:3])
                    or "nothing")
             )
+            ledger.io(
+                input={"query": query, "top_k": retrieval.dense_top_k},
+                output=[
+                    {"doc_id": c.doc_id, "score": round(c.dense_score, 4)}
+                    for c in dense
+                ],
+                embedder=cfg.embedding.signature,
+                chunks=len(dense_index.chunks),
+            )
 
         trace.append(
             "retrieve: dense top "
@@ -165,6 +194,18 @@ class FileStore:
             ledger.detail(
                 f"lexical={len(lexical)} dense={len(dense)} -> {len(fused)} "
                 f"(k={retrieval.rrf_k})"
+            )
+            # Both inputs and the fused order, because the interesting failure
+            # here is a document that either arm ranked well and fusion buried.
+            ledger.io(
+                input={
+                    "lexical": [c.doc_id for c in lexical],
+                    "dense": [c.doc_id for c in dense],
+                },
+                output=[
+                    {"doc_id": c.doc_id, "rrf": round(c.fused_score, 5)} for c in fused
+                ],
+                rrf_k=retrieval.rrf_k,
             )
 
         return fused, trace

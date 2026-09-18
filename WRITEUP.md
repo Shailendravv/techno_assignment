@@ -296,7 +296,7 @@ in config, backoff and retry, an answer cache, and a weekly keep-alive cron.
 | Relevance grading + corrective retry (CRAG) | Implemented, bounded at one retry |
 | Exact-answer cache | Implemented (Postgres, keyed on normalised question + arm) |
 | **Semantic cache** | **Declined — see below** |
-| Tracing / observability | Implemented (Langfuse over HTTP, off unless configured) |
+| Tracing / observability | Implemented (Langfuse SDK: nested trace tree, per-call token usage, outcome scores; off unless configured) |
 | Offline/online ingestion split | Implemented; ingestion never runs in a request |
 | Job state | A Postgres table, replacing Redis Streams + Celery |
 | ACL / multi-tenant isolation | Declined: single-tenant demo. RLS is on with no policy, so a leaked anon key reads nothing |

@@ -150,6 +150,19 @@ def ground(
             f"clauses=[{', '.join(PROMPT_CLAUSES)}] "
             f"absent=[{', '.join(PROMPT_CLAUSES_ABSENT)}]"
         )
+        # Which defences the prompt carried, on the trace as well as in the
+        # log. An absent defence is a property of the answer, and "this run was
+        # not protected against prompt injection" is not something a reader can
+        # infer from the answer or from the prompt's length.
+        ledger.io(
+            input={"documents": [c.doc_id for c in candidates]},
+            output={
+                "messages": len(messages),
+                "chars": sum(len(m["content"]) for m in messages),
+            },
+            clauses=list(PROMPT_CLAUSES),
+            clauses_absent=list(PROMPT_CLAUSES_ABSENT),
+        )
 
     try:
         parsed, calls = chat_json(messages, role=role, cfg=cfg)

@@ -73,6 +73,14 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    finally:
+        # A CLI run is the short-lived process the Langfuse docs warn about:
+        # the SDK batches on a background thread, and `python -m agent` exits
+        # long before that thread would have got its turn. In the `finally` so
+        # the run that raised - the one worth looking at - is also sent.
+        from agent.observability import flush
+
+        flush()
 
     if args.json:
         print(json.dumps(result, indent=2))

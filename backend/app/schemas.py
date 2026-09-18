@@ -22,6 +22,18 @@ class AskRequest(BaseModel):
     # most interesting thing this system has to say.
     explain: bool = False
 
+    # Observability only - neither changes an answer. `session_id` groups the
+    # questions of one sitting into a Langfuse session, which is what makes a
+    # follow-up question readable as a follow-up rather than as an unrelated
+    # trace that happens to be nearby. `user_id` attributes cost and quality.
+    #
+    # Both are client-supplied and therefore untrusted: they are opaque labels
+    # on a trace, never an authorisation claim, and nothing here reads them
+    # back. Length-capped so a caller cannot use them as a data channel into
+    # the observability backend.
+    session_id: str | None = Field(default=None, max_length=200)
+    user_id: str | None = Field(default=None, max_length=200)
+
 
 class AskResponse(BaseModel):
     """Exactly the three fields the brief specifies, plus diagnostics.
@@ -70,6 +82,7 @@ class HealthResponse(BaseModel):
     gemini_configured: bool
     supabase_configured: bool
     cloudinary_configured: bool
+    langfuse_configured: bool
 
 
 class SignRequest(BaseModel):

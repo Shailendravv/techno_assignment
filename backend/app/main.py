@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -35,10 +35,36 @@ from logger.zap import create_logger
 log = create_logger()
 
 
+def _flush_traces() -> None:
+    """Push any queued Langfuse events out before this request returns.
+
+    A no-op when tracing is not configured, which is the default. Never raises:
+    the rule `agent/observability.py` states applies here too - losing a trace
+    is acceptable, failing a request to deliver one is not.
+    """
+    try:
+        from agent import observability
+
+        observability.flush()
+    except Exception:  # noqa: BLE001 - observability may never fail a request
+        pass
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    log.info("app_startup", profile=settings.profile, store=settings.store)
+    from agent import observability
+
+    log.info(
+        "app_startup",
+        profile=settings.profile,
+        store=settings.store,
+        tracing="langfuse" if observability.enabled() else "off",
+    )
     yield
+    # The other half of the serverless problem: a long-lived process (uvicorn
+    # locally, a warm container) should not lose whatever is still queued when
+    # it is finally told to stop.
+    _flush_traces()
 
 
 app = FastAPI(
@@ -100,7 +126,7 @@ def health() -> HealthResponse:
 
 
 @app.post("/ask", response_model=AskResponse)
-def ask(request: AskRequest) -> AskResponse:
+def ask(request: AskRequest, background: BackgroundTasks) -> AskResponse:
     """Answer a question from the runbooks, or decline to.
 
     A `no_match` response is a 200, not a 404. The agent declining to answer is
@@ -118,11 +144,26 @@ def ask(request: AskRequest) -> AskResponse:
             # access log both report, and a cost figure that silently defaults
             # to zero is worse than no figure at all.
             with_metrics=True,
+            session_id=request.session_id,
+            user_id=request.user_id,
         )
     except LLMUnavailable as exc:
         # Configuration, not a bug: no key, so the grounding step cannot run.
         log.warning("ask_unavailable", error=str(exc))
+        # Inline, because an HTTPException leaves the normal response path and
+        # takes any background task registered on it with it. A request that
+        # failed for want of a key is exactly the one somebody goes looking for
+        # in the traces, so this one pays the flush rather than losing it.
+        _flush_traces()
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    # Not inside the request, and not left to the exporter's own timer either.
+    # Langfuse batches on a background thread and a serverless function can be
+    # frozen the moment it returns, so "flush eventually" means "do not flush";
+    # but flushing before the response bills the user for a round trip to
+    # Langfuse. A Starlette background task runs after the body is sent and
+    # before the ASGI cycle completes, which is both.
+    background.add_task(_flush_traces)
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 

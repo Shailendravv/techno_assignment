@@ -66,6 +66,7 @@ nav:
   - Architecture:
       - Overview: architecture/overview.md
       - Pipeline Components: architecture/components.md
+      - Observability: architecture/observability.md
       - Data Contracts: architecture/data-contracts.md
   - Evaluation:
       - The Scoring Model: evaluation/scoring.md

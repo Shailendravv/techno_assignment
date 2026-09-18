@@ -295,6 +295,25 @@ class Settings:
     groq_api_key: str = field(default_factory=lambda: _env("GROQ_API_KEY", ""))
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY", ""))
 
+    # Langfuse. Absent keys mean tracing is off and no network call is made -
+    # which is the default, and what keeps the test suite offline. The host is
+    # a setting rather than a constant because Langfuse Cloud is regional (EU,
+    # US, and self-hosted are all different origins) and sending traces to the
+    # wrong region is a silent, quota-consuming mistake.
+    langfuse_public_key: str = field(default_factory=lambda: _env("LANGFUSE_PUBLIC_KEY", ""))
+    langfuse_secret_key: str = field(default_factory=lambda: _env("LANGFUSE_SECRET_KEY", ""))
+    langfuse_host: str = field(
+        default_factory=lambda: _env("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    )
+
+    # The off switch that does not require deleting a key. Keys live in `.env`
+    # and get shared between the app, the CLI and the test suite; without this,
+    # "do not send traces from this run" means editing credentials, which is
+    # how credentials get lost. The test suite sets it false for every test.
+    langfuse_tracing: bool = field(
+        default_factory=lambda: _env_bool("LANGFUSE_TRACING_ENABLED", True)
+    )
+
     # Bound on the corrective-retrieval loop. An unbounded rewrite cycle on a
     # rate-limited free tier is a real hazard, not a theoretical one.
     max_rewrites: int = field(default_factory=lambda: _env_int("MAX_REWRITES", 1))
@@ -336,6 +355,14 @@ class Settings:
     def has_gemini(self) -> bool:
         return bool(self.gemini_api_key)
 
+    @property
+    def has_langfuse(self) -> bool:
+        return bool(
+            self.langfuse_tracing
+            and self.langfuse_public_key
+            and self.langfuse_secret_key
+        )
+
     def describe(self) -> dict:
         """What this instance is configured as - for `/health` and the CLI.
 
@@ -353,6 +380,7 @@ class Settings:
             "gemini_configured": self.has_gemini,
             "supabase_configured": self.supabase.configured,
             "cloudinary_configured": self.cloudinary.configured,
+            "langfuse_configured": self.has_langfuse,
         }
 
 

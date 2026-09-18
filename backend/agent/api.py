@@ -31,6 +31,8 @@ def answer_question(
     cfg: Settings | None = None,
     with_trace: bool = False,
     with_metrics: bool = False,
+    session_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """Answer a question from the runbooks, or decline to.
 
@@ -53,6 +55,11 @@ def answer_question(
     counter is a single integer worth reporting on every request. Keeping them
     apart means a caller that reports the counter has to ask for it, so the
     number it prints was measured rather than defaulted.
+
+    `session_id` and `user_id` are for Langfuse and nothing else - they change
+    no behaviour here. A session groups the traces of one conversation or one
+    harness run, which is the difference between reading twenty separate
+    questions and reading the run that asked them.
     """
     cfg = cfg or default_settings
 
@@ -69,67 +76,84 @@ def answer_question(
     question = question.strip()
     started = time.perf_counter()
 
+    from agent import observability
     from agent.cache import get_cache
 
     cache = get_cache(cfg)
-    hit = cache.get(question)
-    if hit is not None:
-        # A cache hit still gets a ledger, all of it skipped for one stated
-        # reason. Otherwise the fastest runs are the ones that log nothing, and
-        # "no stage lines" would mean both "cached" and "logging is broken".
-        from agent.stages import QUERY, new_recorder
 
-        cached_ledger = new_recorder(QUERY, cfg=cfg)
-        cached_ledger.skip_remaining("answer cache: exact hit, pipeline not run")
-        cached_ledger.flush()
+    # The Langfuse trace is scoped here, around the cache and the graph both,
+    # for the same reason they are: this is the entry point, and one question
+    # is one trace. Scoping it inside the graph would lose the cache hits - the
+    # cheapest and most misleading runs to have no record of.
+    with observability.trace_run(
+        question,
+        cfg,
+        session_id=session_id,
+        user_id=user_id,
+        model_role=model_role,
+    ) as root:
+        hit = cache.get(question)
+        if hit is not None:
+            # A cache hit still gets a ledger, all of it skipped for one stated
+            # reason. Otherwise the fastest runs are the ones that log nothing,
+            # and "no stage lines" would mean both "cached" and "logging is
+            # broken".
+            from agent.stages import QUERY, new_recorder
+
+            cached_ledger = new_recorder(QUERY, cfg=cfg)
+            cached_ledger.skip_remaining("answer cache: exact hit, pipeline not run")
+            cached_ledger.flush()
+
+            result = {
+                "answer": hit["answer"],
+                "cited_doc_ids": hit["cited_doc_ids"],
+                "confidence": hit["confidence"],
+            }
+            observability.finish(
+                root,
+                result,
+                llm_calls=0,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                cached=True,
+            )
+            if with_trace:
+                result["trace"] = ["cache: exact hit, pipeline not run"]
+            if with_metrics:
+                result["llm_calls"] = 0
+            return result
+
+        state = new_state(question, model_role=model_role)
+        state["settings"] = cfg
+
+        # The stage ledger is scoped here, around the graph, for the same
+        # reason the cache and the trace are: it is a concern of the entry
+        # point. A node that constructed its own recorder would emit a separate
+        # ledger per rewrite of the corrective loop, and the loop is one run.
+        from agent.stages import QUERY, new_recorder, using_recorder
+
+        recorder = new_recorder(QUERY, cfg=cfg)
+        with using_recorder(recorder):
+            final = COMPILED.invoke(state)
 
         result = {
-            "answer": hit["answer"],
-            "cited_doc_ids": hit["cited_doc_ids"],
-            "confidence": hit["confidence"],
+            "answer": final.get("answer", NO_MATCH_MESSAGE),
+            "cited_doc_ids": final.get("cited_doc_ids", []),
+            "confidence": final.get("confidence", "no_match"),
         }
+
+        # Cache the refusal too. A `no_match` is a considered result, and
+        # re-deriving it costs exactly what deriving it did.
+        cache.put(question, result)
+
+        observability.finish(
+            root,
+            result,
+            llm_calls=final.get("llm_calls", 0),
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
+
         if with_trace:
-            result["trace"] = ["cache: exact hit, pipeline not run"]
+            result["trace"] = final.get("trace", [])
         if with_metrics:
-            result["llm_calls"] = 0
+            result["llm_calls"] = final.get("llm_calls", 0)
         return result
-
-    state = new_state(question, model_role=model_role)
-    state["settings"] = cfg
-
-    # The stage ledger is scoped here, around the graph, for the same reason
-    # the cache and the trace exporter are: it is a concern of the entry point.
-    # A node that constructed its own recorder would emit a separate ledger per
-    # rewrite of the corrective loop, and the loop is one run.
-    from agent.stages import QUERY, new_recorder, using_recorder
-
-    recorder = new_recorder(QUERY, cfg=cfg)
-    with using_recorder(recorder):
-        final = COMPILED.invoke(state)
-
-    result = {
-        "answer": final.get("answer", NO_MATCH_MESSAGE),
-        "cited_doc_ids": final.get("cited_doc_ids", []),
-        "confidence": final.get("confidence", "no_match"),
-    }
-
-    # Cache the refusal too. A `no_match` is a considered result, and
-    # re-deriving it costs exactly what deriving it did.
-    cache.put(question, result)
-
-    from agent.observability import export_trace
-
-    export_trace(
-        question=question,
-        result=result,
-        trace=final.get("trace", []),
-        llm_calls=final.get("llm_calls", 0),
-        elapsed_ms=int((time.perf_counter() - started) * 1000),
-        cfg=cfg,
-    )
-
-    if with_trace:
-        result["trace"] = final.get("trace", [])
-    if with_metrics:
-        result["llm_calls"] = final.get("llm_calls", 0)
-    return result

@@ -39,7 +39,7 @@ ARMS = ("lexical", "hybrid", "baseline")
 
 
 def _run_one(
-    question: EvalQuestion, arm: str, cfg: Settings
+    question: EvalQuestion, arm: str, cfg: Settings, session_id: str = ""
 ) -> QuestionResult:
     started = time.perf_counter()
     error = ""
@@ -55,7 +55,17 @@ def _run_one(
             # paces on them: a counter left at 0 would both understate the
             # run's cost and skip the delay that keeps it inside the tier.
             result = answer_question(
-                question.question, cfg=cfg, with_trace=True, with_metrics=True
+                question.question,
+                cfg=cfg,
+                with_trace=True,
+                with_metrics=True,
+                # One Langfuse session per arm, so twenty traces read as the
+                # run that produced a score rather than twenty unrelated
+                # questions that happen to share a timestamp. `user_id` names
+                # the arm, which is what makes "did hybrid cost more than
+                # lexical" a question the dashboard can answer.
+                session_id=session_id or None,
+                user_id=f"harness:{arm}",
             )
     except LLMUnavailable:
         raise
@@ -88,9 +98,10 @@ def run_arm(
 ) -> dict:
     """Run every question through one arm and score the results."""
     results: list[QuestionResult] = []
+    session_id = f"harness-{arm}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
 
     for index, question in enumerate(questions, 1):
-        result = _run_one(question, arm, cfg)
+        result = _run_one(question, arm, cfg, session_id=session_id)
         results.append(result)
 
         if not quiet:
@@ -106,6 +117,14 @@ def run_arm(
         # question and whenever the answer cost nothing.
         if delay and index < len(questions) and result.llm_calls:
             time.sleep(delay)
+
+    # A harness run is a script, and a script can outrun the exporter's
+    # background thread by exiting. Once per arm rather than per question: the
+    # queue is shared, and flushing twenty times would add twenty round trips
+    # to a run that is already pacing itself against a rate limit.
+    from agent.observability import flush
+
+    flush()
 
     return build_report(arm, results)
 

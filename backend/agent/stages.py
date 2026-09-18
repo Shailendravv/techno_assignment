@@ -152,6 +152,46 @@ def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
 
 
+class _NullObservation:
+    """An observation that records nothing, for when Langfuse is not there."""
+
+    def update(self, **_):
+        return self
+
+    def end(self, **_):
+        return None
+
+
+_NULL_OBSERVATION = _NullObservation()
+
+
+class _NoTracing:
+    """The stand-in for `agent.observability` when it cannot be imported.
+
+    Instrumentation that breaks on an import error is worse than absent
+    instrumentation, because it takes the pipeline down with it. This keeps the
+    part of that module's contract this one uses - `NOOP` and
+    `stage_observation` - with no Langfuse and no import.
+    """
+
+    NOOP = _NULL_OBSERVATION
+
+    @staticmethod
+    @contextmanager
+    def stage_observation(_name: str):
+        yield _NULL_OBSERVATION
+
+
+def _observability():
+    """`agent.observability`, or a silent stand-in for it."""
+    try:
+        from agent import observability
+
+        return observability
+    except Exception:  # noqa: BLE001 - see the module docstring
+        return _NoTracing
+
+
 def _default_logger():
     try:
         from logger.zap import create_logger
@@ -166,13 +206,42 @@ def _default_logger():
 # ---------------------------------------------------------------------------
 
 class _Open:
-    """The handle a `with recorder.stage(...)` block writes its detail to."""
+    """The handle a `with recorder.stage(...)` block writes its detail to.
 
-    def __init__(self):
+    It carries the Langfuse observation for the same stage, when there is one.
+    `detail()` is the log line; `io()` is what Langfuse shows as the step's
+    input and output. Both are optional and both go to the same place - the
+    stage that is currently open - so a call site never has to know whether
+    tracing is on.
+    """
+
+    def __init__(self, observation=None):
         self._detail = ""
+        self._observation = observation or _observability().NOOP
 
     def detail(self, text: str) -> None:
         self._detail = str(text)
+        # The ledger line doubles as the observation's status message, so a
+        # trace opened from a log line says the same thing the log line did.
+        self._observation.update(metadata={"detail": self._detail})
+
+    def io(self, input=None, output=None, **metadata) -> None:
+        """Set what this step was given and what it produced, for Langfuse.
+
+        A no-op when tracing is off, which is most of the time. Only the stages
+        whose input and output a human would actually want to read call this -
+        an observation with neither is noise, and one carrying a dump of
+        everything in scope is worse.
+        """
+        fields = {}
+        if input is not None:
+            fields["input"] = input
+        if output is not None:
+            fields["output"] = output
+        if metadata:
+            fields["metadata"] = metadata
+        if fields:
+            self._observation.update(**fields)
 
 
 class StageRecorder:
@@ -199,20 +268,37 @@ class StageRecorder:
 
         A stage that raises is recorded as `failed` and the exception continues
         on its way. Instrumentation reports the failure; it does not handle it.
+
+        This is also the one place Langfuse observations are created, for the
+        reason `agent/observability.py` states: the trace tree and this ledger
+        are the same events, and building them from two sets of call sites is
+        how they drift. The observation is opened around the same block, so the
+        duration Langfuse reports is the duration logged here, and nesting
+        follows the call stack without anybody passing a parent around.
         """
-        handle = _Open()
-        started = time.perf_counter()
-        try:
-            yield handle
-        except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
-            self._emit(
-                name,
-                Status.FAILED,
-                ms=_elapsed_ms(started),
-                reason=f"{type(exc).__name__}: {exc}",
-            )
-            raise
-        self._emit(name, Status.RAN, ms=_elapsed_ms(started), detail=handle._detail)
+        with _observability().stage_observation(name) as observation:
+            handle = _Open(observation)
+            started = time.perf_counter()
+            try:
+                yield handle
+            except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
+                self._emit(
+                    name,
+                    Status.FAILED,
+                    ms=_elapsed_ms(started),
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+                # Langfuse renders an errored observation differently, which is
+                # the difference between finding the failure and reading twelve
+                # green spans looking for it.
+                try:
+                    observation.update(
+                        level="ERROR", status_message=f"{type(exc).__name__}: {exc}"
+                    )
+                except Exception:  # noqa: BLE001 - see the module docstring
+                    pass
+                raise
+            self._emit(name, Status.RAN, ms=_elapsed_ms(started), detail=handle._detail)
 
     def ran(self, name: str, detail: str = "", ms: int = 0) -> None:
         """Record a stage that ran, where wrapping it in a block does not fit."""
@@ -228,8 +314,24 @@ class StageRecorder:
         Distinct from `skip` on purpose: a degraded stage produced output, and
         anything comparing this run against another needs to know the output
         was not the thing the configuration asked for.
+
+        This is the one status that also reaches Langfuse outside a block, as a
+        warning-level event. A skipped stage is usually just the profile doing
+        what it was told; a degraded one means the run served something the
+        configuration did not ask for, and that is worth finding in a trace
+        rather than only in a log nobody greps until afterwards.
         """
         self._emit(name, Status.DEGRADED, reason=reason)
+        try:
+            observability = _observability()
+            if getattr(observability, "tracing", lambda: False)():
+                observability.event(
+                    name=f"degraded-{name.replace('_', '-')}",
+                    level="WARNING",
+                    status_message=reason,
+                )
+        except Exception:  # noqa: BLE001 - see the module docstring
+            pass
 
     def skip_remaining(self, reason: str) -> None:
         """Attribute every stage not yet reported to one cause.

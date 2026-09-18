@@ -82,6 +82,8 @@ directly — swapping a model is a config change, never a code change.
 | `answer_cache` | `false` | Exact-match cache keyed on the normalised question *and* the arm. Off locally so the harness measures the pipeline rather than the cache. |
 | `llm_max_retries` | `3` | Retries with exponential backoff on Groq's 429. |
 | `llm_timeout_s` | `45.0` | Per-call timeout. |
+| `langfuse_host` | `https://cloud.langfuse.com` | Langfuse Cloud is regional; keys are issued per region, so the EU and US origins are not interchangeable. |
+| `langfuse_tracing` | `true` | `LANGFUSE_TRACING_ENABLED=false` turns tracing off without deleting the keys. The test suite sets it for every test. See [Observability](../architecture/observability.md). |
 
 ## Secrets
 

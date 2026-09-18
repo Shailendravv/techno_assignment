@@ -246,7 +246,7 @@ agent/
   store/            Store protocol -> FileStore | SupabaseStore
   embed.py          one Embedder interface: fastembed | Gemini | none
   cache.py          exact-answer cache (and why there is no semantic one)
-  observability.py  Langfuse export, off unless configured
+  observability.py  Langfuse tracing, off unless configured
   llm.py            Groq client: 429 backoff, defensive JSON parsing
   config.py         every tuned constant and model ID
 
@@ -285,10 +285,14 @@ with no keys and no internet.
 Everything runs on free tiers. Groq has **no embeddings endpoint**, which is why
 embeddings come from Google instead.
 
-Supabase, Cloudinary and Langfuse are talked to over stdlib `urllib` rather than
-their SDKs. Those packages drag in large dependency trees for what amounts to a
-few JSON POSTs, Vercel's bundler does no tree-shaking, and the bundle limit is
-real.
+Supabase and Cloudinary are talked to over stdlib `urllib` rather than their
+SDKs. Those packages drag in large dependency trees for what amounts to a few
+JSON POSTs, Vercel's bundler does no tree-shaking, and the bundle limit is real.
+
+Langfuse is the exception, and it earns the dependency: the SDK is what makes
+each Groq call a `generation` carrying model, tokens and latency, and the
+pipeline a nested tree rather than a flat list of strings. See
+[Observability](backend/docs/architecture/observability.md).
 
 ---
 

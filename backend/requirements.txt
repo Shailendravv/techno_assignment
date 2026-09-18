@@ -17,8 +17,18 @@ python-frontmatter==1.1.0
 # fastembed instead, which is a dev dependency and excluded from the bundle.
 google-genai==0.3.0
 
+# Tracing. This one reverses an earlier decision, so the reasoning is here
+# rather than in a commit message: the hand-rolled urllib exporter it replaces
+# was forty lines and produced a trace that was structurally wrong - one
+# timestamp for every span, so nothing had a duration, and the Groq calls as
+# strings rather than `generation` observations, so no model, no tokens and
+# therefore no cost anywhere in Langfuse. The SDK brings the OpenTelemetry
+# runtime with it (~8 MB unpacked, well inside Vercel's limit) and it brings
+# the data model those numbers live in. httpx and pydantic are already here via
+# groq and fastapi, so the marginal cost is the OTel packages alone.
+langfuse==4.15.4
+
 # Deliberately NOT here, and talked to over stdlib urllib instead:
 #   supabase    - drags in gotrue, storage3, realtime, postgrest for what is
 #                 two JSON POSTs to PostgREST
 #   cloudinary  - three HTTP calls and a SHA-1
-#   langfuse    - one authenticated POST of a JSON batch

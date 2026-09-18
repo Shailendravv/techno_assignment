@@ -110,84 +110,130 @@ def chat(
     client = _get_client(cfg)
     recorder = current_recorder()
 
+    from agent import observability
+
     last: Exception | None = None
     for attempt in range(cfg.llm_max_retries):
         started = time.perf_counter()
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            text = response.choices[0].message.content or ""
+        # One Langfuse `generation` per round trip, opened here because this is
+        # the only place that knows the model, the messages as sent, and the
+        # token usage that comes back - which is everything Langfuse needs to
+        # attribute cost. A span further up could time the call and nothing
+        # else.
+        with observability.generation(
+            role=role,
+            model=model,
+            messages=messages,
+            attempt=attempt + 1,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ) as generation:
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                text = response.choices[0].message.content or ""
 
-            # One line per request that reached Groq. This is the only place
-            # that knows a call actually went out - every count further up is
-            # derived from what this function returns - so a run's real API
-            # usage is reconstructable from the log alone.
-            #
-            # Tokens are logged because the free tier's binding limit is 8k
-            # *per minute*, not requests per day: a 429 is predictable from
-            # token spend and from nothing else.
-            usage = getattr(response, "usage", None)
-            log.info(
-                "llm_call",
-                model=model,
-                role=role,
-                attempt=attempt + 1,
-                elapsed_ms=int((time.perf_counter() - started) * 1000),
-                prompt_tokens=getattr(usage, "prompt_tokens", 0),
-                completion_tokens=getattr(usage, "completion_tokens", 0),
-                total_tokens=getattr(usage, "total_tokens", 0),
-            )
-
-            # The gateway stage records the *first* call of a run, which is the
-            # one that says a request reached Groq at all. Per-call detail is
-            # the `llm_call` line above; this is the ledger's single row.
-            recorder.ran(
-                "llm_gateway",
-                detail=(
-                    f"{model} role={role} attempt={attempt + 1} "
-                    f"tokens={getattr(usage, 'total_tokens', 0)}"
-                ),
-                ms=int((time.perf_counter() - started) * 1000),
-            )
-
-            return LLMResult(
-                text=_THINK_BLOCK.sub("", text).strip(),
-                model=model,
-                calls=attempt + 1,
-            )
-        except Exception as exc:  # noqa: BLE001 - re-raised below
-            last = exc
-            if not _is_rate_limit(exc) or attempt == cfg.llm_max_retries - 1:
-                # A request that failed still reached Groq and still counted
-                # against the quota. Logging only successes would produce a
-                # local record that cannot be reconciled with their dashboard.
-                log.error(
-                    "llm_call_failed",
+                # One line per request that reached Groq. This is the only
+                # place that knows a call actually went out - every count
+                # further up is derived from what this function returns - so a
+                # run's real API usage is reconstructable from the log alone.
+                #
+                # Tokens are logged because the free tier's binding limit is 8k
+                # *per minute*, not requests per day: a 429 is predictable from
+                # token spend and from nothing else.
+                usage = getattr(response, "usage", None)
+                prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                total_tokens = getattr(usage, "total_tokens", 0) or 0
+                log.info(
+                    "llm_call",
                     model=model,
                     role=role,
                     attempt=attempt + 1,
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
-                    error=f"{type(exc).__name__}: {exc}",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
                 )
-                recorder.degrade(
+
+                # The same three numbers, in the shape Langfuse prices from.
+                # They are the whole reason cost shows up in a dashboard at
+                # all: without usage on the generation, a trace reports latency
+                # and nothing about what the run spent.
+                generation.update(
+                    output=text,
+                    usage_details={
+                        "input": prompt_tokens,
+                        "output": completion_tokens,
+                        "total": total_tokens,
+                    },
+                    metadata={
+                        "finish_reason": getattr(
+                            response.choices[0], "finish_reason", ""
+                        )
+                    },
+                )
+
+                # The gateway stage records the *first* call of a run, which is
+                # the one that says a request reached Groq at all. Per-call
+                # detail is the `llm_call` line above; this is the ledger's
+                # single row.
+                recorder.ran(
                     "llm_gateway",
-                    f"{model} failed after {attempt + 1} attempt(s): "
-                    f"{type(exc).__name__}",
+                    detail=(
+                        f"{model} role={role} attempt={attempt + 1} "
+                        f"tokens={total_tokens}"
+                    ),
+                    ms=int((time.perf_counter() - started) * 1000),
                 )
-                raise
-            wait_s = _retry_after(exc, attempt)
-            log.warning(
-                "rate_limited",
-                model=model,
-                role=role,
-                attempt=attempt + 1,
-                wait_s=wait_s,
-            )
-            time.sleep(wait_s)
+
+                return LLMResult(
+                    text=_THINK_BLOCK.sub("", text).strip(),
+                    model=model,
+                    calls=attempt + 1,
+                )
+            except Exception as exc:  # noqa: BLE001 - re-raised below
+                last = exc
+                # On the generation as well as in the log. A 429 that was
+                # retried is a real request, and a cost or latency view that
+                # only counted the successful attempt would under-report both.
+                generation.update(
+                    level="ERROR", status_message=f"{type(exc).__name__}: {exc}"
+                )
+                if not _is_rate_limit(exc) or attempt == cfg.llm_max_retries - 1:
+                    # A request that failed still reached Groq and still
+                    # counted against the quota. Logging only successes would
+                    # produce a local record that cannot be reconciled with
+                    # their dashboard.
+                    log.error(
+                        "llm_call_failed",
+                        model=model,
+                        role=role,
+                        attempt=attempt + 1,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    recorder.degrade(
+                        "llm_gateway",
+                        f"{model} failed after {attempt + 1} attempt(s): "
+                        f"{type(exc).__name__}",
+                    )
+                    raise
+                wait_s = _retry_after(exc, attempt)
+                log.warning(
+                    "rate_limited",
+                    model=model,
+                    role=role,
+                    attempt=attempt + 1,
+                    wait_s=wait_s,
+                )
+        # Outside the `with`, so the generation is closed before the backoff
+        # and its duration is the request rather than the request plus the wait.
+        time.sleep(wait_s)
 
     raise last  # type: ignore[misc]  # unreachable; loop either returns or raises
 
