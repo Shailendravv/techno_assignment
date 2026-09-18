@@ -1,0 +1,421 @@
+{
+  "arm": "hybrid",
+  "outcomes": {
+    "CORRECT_CITATION": 15,
+    "PARTIAL": 0,
+    "WRONG_CITATION": 0,
+    "CORRECT_NO_MATCH": 5,
+    "MISSED": 0,
+    "FALSE_CITATION": 0
+  },
+  "citation_precision": 1.0,
+  "citation_recall": 1.0,
+  "no_match_precision": 1.0,
+  "no_match_recall": 1.0,
+  "overall_score": 1.0,
+  "counts": {
+    "total": 20,
+    "answerable": 15,
+    "unanswerable": 5
+  },
+  "total_llm_calls": 16,
+  "mean_elapsed_ms": 9143,
+  "by_tag": {
+    "given": {
+      "total": 5,
+      "good": 5,
+      "ids": [],
+      "rate": 1.0
+    },
+    "near-duplicate-trap": {
+      "total": 8,
+      "good": 8,
+      "ids": [],
+      "rate": 1.0
+    },
+    "general-doc": {
+      "total": 4,
+      "good": 4,
+      "ids": [],
+      "rate": 1.0
+    },
+    "vocabulary-mismatch": {
+      "total": 2,
+      "good": 2,
+      "ids": [],
+      "rate": 1.0
+    },
+    "no-match": {
+      "total": 5,
+      "good": 5,
+      "ids": [],
+      "rate": 1.0
+    }
+  },
+  "per_question": [
+    {
+      "id": 1,
+      "question": "checkout-api is running hot on CPU - what should I check first?",
+      "expected": [
+        "RB-001"
+      ],
+      "got": [
+        "RB-001"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "Check the deploy log for a recent release (e.g., `kubectl rollout history deploy/checkout-api`).",
+      "elapsed_ms": 1403,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 2,
+      "question": "We are seeing 'too many connections' errors on checkout-api - what is the likely cause?",
+      "expected": [
+        "RB-002"
+      ],
+      "got": [
+        "RB-002",
+        "RB-012"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "The most common cause is connection\u2011pool exhaustion caused by a deploy that increased the number of checkout\u2011api replicas without reducing the per\u2011pod pool size, exceeding the Postgres primary\u2019s max_connections. (Other possible causes are a slow query or a connection leak.)",
+      "elapsed_ms": 9815,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 3,
+      "question": "How do I safely roll back checkout-api to a previous version?",
+      "expected": [
+        "RB-005"
+      ],
+      "got": [
+        "RB-005"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "1. Verify the current release: `kubectl rollout history deploy/checkout-api` and note the revision number you want to revert to (and its image tag).\n2. If the release included a database migration, confirm it was additive; if it was destructive, do not roll back until the migration is reversed or fix forward.\n3. Execute the rollback: `kubectl rollout undo deploy/checkout-api --to-revision=<revisio",
+      "elapsed_ms": 16020,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 4,
+      "question": "We had a checkout-api incident on 2026-08-10 - what was the root cause and how was it fixed?",
+      "expected": [
+        "RB-012"
+      ],
+      "got": [
+        "RB-012"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "Root cause: a deploy (checkout\u2011api@2026.08.10\u20111) raised the HPA minimum to 12 replicas while keeping the per\u2011pod DB connection pool at 30 (plus 10 overflow), exhausting the Postgres primary\u2019s max_connections (200). Fix: rolled back the release, returning replica count to 4, which dropped total connections below the limit and restored normal operation.",
+      "elapsed_ms": 15196,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 5,
+      "question": "What is our policy for communicating an incident to customers?",
+      "expected": [
+        "RB-011"
+      ],
+      "got": [
+        "RB-011"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "given",
+        "general-doc"
+      ],
+      "answer": "We must tell customers early, in plain language, and include what we don\u2019t yet know. A public notice is required immediately for SEV1 incidents (any duration) and any incident involving customer data; for SEV2 it\u2019s required if it lasts >30\u202fmin (otherwise only a status\u2011page update). Payment failures always trigger a notice. The incident commander (or the responder if no commander) writes the notice",
+      "elapsed_ms": 14106,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 6,
+      "question": "payments-api CPU is pegged above 85%. Where do I start?",
+      "expected": [
+        "RB-003"
+      ],
+      "got": [
+        "RB-003"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [
+        "near-duplicate-trap"
+      ],
+      "answer": "Start with the first checks in the High CPU runbook: 1) Check the deploy log for a recent release (`kubectl rollout history deploy/payments-api`). 2) Open the payments\u2011api Grafana board and compare CPU against request rate \u2013 if CPU rose while traffic stayed flat the cause is likely code. 3) Check whether the nightly settlement batch is running, as it shares the pod pool and is CPU\u2011heavy. 4) Confir",
+      "elapsed_ms": 10095,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 7,
+      "question": "checkout-api containers keep restarting with exit code 137. What is going on?",
+      "expected": [
+        "RB-004"
+      ],
+      "got": [
+        "RB-004"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [
+        "near-duplicate-trap"
+      ],
+      "answer": "Exit code\u202f137 means the container was OOM\u2011killed. The checkout\u2011api pods are hitting their memory limit \u2013 the working set climbs steadily (sawtooth pattern) and kubectl reports OOMKilled. This is a memory/Out\u2011of\u2011Memory issue.",
+      "elapsed_ms": 8039,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 8,
+      "question": "What is the rollback procedure for payments-api?",
+      "expected": [
+        "RB-006"
+      ],
+      "got": [
+        "RB-006"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "near-duplicate-trap"
+      ],
+      "answer": "1. Confirm the current release with `kubectl rollout history deploy/payments-api` and note the revision and image tag.\n2. Review the release notes; if the deploy included a database migration, read the migration safety section before proceeding.\n3. If safe, execute the rollback:\n   ```\n   kubectl rollout undo deploy/payments-api --to-revision=<revision>\n   kubectl rollout status deploy/payments-ap",
+      "elapsed_ms": 14242,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 9,
+      "question": "inventory-api is refusing connections with 'too many clients already'. What should I do?",
+      "expected": [
+        "RB-007"
+      ],
+      "got": [
+        "RB-007"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [
+        "near-duplicate-trap"
+      ],
+      "answer": "1. Check current DB connections: query pg_stat_activity and look for many idle\u2011in\u2011transaction (leak) or active (slow query) sessions. 2. Review the recent deploy log with `kubectl rollout history deploy/inventory-api` and see if a new replica count increased total pool connections. 3. Verify if a stock sync job is running, as it holds connections.\n\nMitigation:\n- If a recent deploy caused excess co",
+      "elapsed_ms": 2053,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 10,
+      "question": "The inventory sync lag alert is firing. How do I stop overselling?",
+      "expected": [
+        "RB-008"
+      ],
+      "got": [
+        "RB-008"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [],
+      "answer": "If the sync lag is causing oversell, enable the `inventory.conservative_stock` flag (it adds a safety buffer to displayed stock). Keep it on while lag is high (e.g., >1800\u202fs) and turn it off once lag drops below 300\u202fs.",
+      "elapsed_ms": 8868,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 11,
+      "question": "The primary on-call has not acknowledged a page. How long before it escalates, and to whom?",
+      "expected": [
+        "RB-009"
+      ],
+      "got": [
+        "RB-009"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "general-doc"
+      ],
+      "answer": "If the primary on\u2011call does not acknowledge within 5\u202fminutes, the page automatically escalates to the secondary on\u2011call. If the secondary also does not acknowledge within a further 5\u202fminutes, it escalates to the engineering manager for that team.",
+      "elapsed_ms": 16086,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 12,
+      "question": "When are we allowed to deploy to production?",
+      "expected": [
+        "RB-010"
+      ],
+      "got": [
+        "RB-010"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "general-doc"
+      ],
+      "answer": "Deploys are allowed 09:00\u201316:00 on working days. Outside that window the on\u2011call engineer must be informed first, and deployments are completely frozen during declared peak commercial periods.",
+      "elapsed_ms": 9920,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 13,
+      "question": "What is expand-and-contract and why do migrations need two releases?",
+      "expected": [
+        "RB-010"
+      ],
+      "got": [
+        "RB-010"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "general-doc"
+      ],
+      "answer": "Expand\u2011and\u2011contract is a two\u2011step migration pattern. In the first (expand) release you add the new column, table or index in a non\u2011destructive way (e.g., nullable) and deploy code that still works with the old schema. After the expand release has been stable for at least a week you issue a second (contract) release that removes the old column or index. Splitting the change into two releases avoids",
+      "elapsed_ms": 12601,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 14,
+      "question": "The checkout service is dragging its feet and the boxes are working too hard.",
+      "expected": [
+        "RB-001"
+      ],
+      "got": [
+        "RB-001"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "vocabulary-mismatch"
+      ],
+      "answer": "1. Check the recent deploy log: `kubectl rollout history deploy/checkout-api`. 2. Open the checkout\u2011api Grafana board and compare CPU usage to request rate \u2013 if CPU rose while traffic stayed flat, the code is the cause. 3. Verify whether the `checkout.pricing.recalc_v2` feature flag was enabled recently; it is a known CPU\u2011bound path. 4. Confirm the node pool isn\u2019t oversubscribed by a noisy neighbo",
+      "elapsed_ms": 13952,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 15,
+      "question": "We are taking orders for things that are not actually sitting in the warehouse. What is the fix?",
+      "expected": [
+        "RB-008"
+      ],
+      "got": [
+        "RB-008"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "low",
+      "tags": [
+        "vocabulary-mismatch"
+      ],
+      "answer": "Enable the `inventory.conservative_stock` flag to add a safety buffer to displayed stock (turn it on while lag >\u202f1800\u202fs, then turn it off once lag is <\u202f300\u202fs). Also address the underlying sync lag \u2013 e.g., restart a crash\u2011looping consumer, increase consumer concurrency for hot partitions, or escalate a schema\u2011change issue.",
+      "elapsed_ms": 13821,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 16,
+      "question": "What is our refund policy for orders over $500?",
+      "expected": [],
+      "got": [],
+      "outcome": "CORRECT_NO_MATCH",
+      "confidence": "no_match",
+      "tags": [
+        "no-match"
+      ],
+      "answer": "None of the provided documents contain information about a refund policy for orders over $500.",
+      "elapsed_ms": 16614,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 17,
+      "question": "How do I restart the recommendation-engine service?",
+      "expected": [],
+      "got": [],
+      "outcome": "CORRECT_NO_MATCH",
+      "confidence": "no_match",
+      "tags": [
+        "no-match"
+      ],
+      "answer": "I couldn't find anything in the runbooks that answers this. Rather than cite the closest-sounding document, I'd rather say so.",
+      "elapsed_ms": 6,
+      "llm_calls": 0,
+      "error": ""
+    },
+    {
+      "id": 18,
+      "question": "What is the runbook for search-api high latency?",
+      "expected": [],
+      "got": [],
+      "outcome": "CORRECT_NO_MATCH",
+      "confidence": "no_match",
+      "tags": [
+        "no-match"
+      ],
+      "answer": "I couldn't find anything in the runbooks that answers this. Rather than cite the closest-sounding document, I'd rather say so.",
+      "elapsed_ms": 5,
+      "llm_calls": 0,
+      "error": ""
+    },
+    {
+      "id": 19,
+      "question": "How many vacation days do engineers get?",
+      "expected": [],
+      "got": [],
+      "outcome": "CORRECT_NO_MATCH",
+      "confidence": "no_match",
+      "tags": [
+        "no-match"
+      ],
+      "answer": "I couldn't find anything in the runbooks that answers this. Rather than cite the closest-sounding document, I'd rather say so.",
+      "elapsed_ms": 5,
+      "llm_calls": 0,
+      "error": ""
+    },
+    {
+      "id": 20,
+      "question": "What is our process for renewing SSL certificates before they expire?",
+      "expected": [],
+      "got": [],
+      "outcome": "CORRECT_NO_MATCH",
+      "confidence": "no_match",
+      "tags": [
+        "no-match"
+      ],
+      "answer": "I couldn't find anything in the runbooks that answers this. Rather than cite the closest-sounding document, I'd rather say so.",
+      "elapsed_ms": 6,
+      "llm_calls": 0,
+      "error": ""
+    }
+  ]
+}

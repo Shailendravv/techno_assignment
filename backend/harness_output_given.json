@@ -1,0 +1,146 @@
+{
+  "arm": "hybrid",
+  "outcomes": {
+    "CORRECT_CITATION": 5,
+    "PARTIAL": 0,
+    "WRONG_CITATION": 0,
+    "CORRECT_NO_MATCH": 0,
+    "MISSED": 0,
+    "FALSE_CITATION": 0
+  },
+  "citation_precision": 1.0,
+  "citation_recall": 1.0,
+  "no_match_precision": 0.0,
+  "no_match_recall": 0.0,
+  "overall_score": 1.0,
+  "counts": {
+    "total": 5,
+    "answerable": 5,
+    "unanswerable": 0
+  },
+  "total_llm_calls": 5,
+  "mean_elapsed_ms": 1328,
+  "by_tag": {
+    "given": {
+      "total": 5,
+      "good": 5,
+      "ids": [],
+      "rate": 1.0
+    },
+    "near-duplicate-trap": {
+      "total": 4,
+      "good": 4,
+      "ids": [],
+      "rate": 1.0
+    },
+    "general-doc": {
+      "total": 1,
+      "good": 1,
+      "ids": [],
+      "rate": 1.0
+    }
+  },
+  "per_question": [
+    {
+      "id": 1,
+      "question": "checkout-api is running hot on CPU - what should I check first?",
+      "expected": [
+        "RB-001"
+      ],
+      "got": [
+        "RB-001"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "Check the deploy log for a recent release (e.g., run `kubectl rollout history deploy/checkout-api`).",
+      "elapsed_ms": 1427,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 2,
+      "question": "We are seeing 'too many connections' errors on checkout-api - what is the likely cause?",
+      "expected": [
+        "RB-002"
+      ],
+      "got": [
+        "RB-002",
+        "RB-012"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "The most common cause is connection\u2011pool exhaustion caused by a deploy that increased the number of checkout\u2011api replicas without reducing the per\u2011pod pool size, exceeding the Postgres primary\u2019s max_connections. (Other possible causes are a slow query or a connection leak.)",
+      "elapsed_ms": 1113,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 3,
+      "question": "How do I safely roll back checkout-api to a previous version?",
+      "expected": [
+        "RB-005"
+      ],
+      "got": [
+        "RB-005"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "1. Verify the current release and note the revision you want to revert to: `kubectl rollout history deploy/checkout-api`.\n2. Check the release notes for that revision. If it included a database migration, ensure the migration was additive; if it was destructive, you must roll back the migration first or fix forward.\n3. Perform the rollback: `kubectl rollout undo deploy/checkout-api --to-revision=<",
+      "elapsed_ms": 1452,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 4,
+      "question": "We had a checkout-api incident on 2026-08-10 - what was the root cause and how was it fixed?",
+      "expected": [
+        "RB-012"
+      ],
+      "got": [
+        "RB-012"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "high",
+      "tags": [
+        "given",
+        "near-duplicate-trap"
+      ],
+      "answer": "Root cause: connection\u2011pool exhaustion caused by the 14:09 deploy that raised the HPA minimum to 12 replicas while keeping the per\u2011pod pool size unchanged, exceeding the Postgres primary\u2019s max_connections limit. Fix: the release was rolled back at 14:51, returning replica count to 4 so connections fell below the limit and the error rate returned to baseline by 14:59.",
+      "elapsed_ms": 1557,
+      "llm_calls": 1,
+      "error": ""
+    },
+    {
+      "id": 5,
+      "question": "What is our policy for communicating an incident to customers?",
+      "expected": [
+        "RB-011"
+      ],
+      "got": [
+        "RB-011"
+      ],
+      "outcome": "CORRECT_CITATION",
+      "confidence": "medium",
+      "tags": [
+        "given",
+        "general-doc"
+      ],
+      "answer": "We must tell customers early, in plain language, and include what we don\u2019t yet know. A public notice is required immediately for SEV1 incidents, for SEV2 lasting >30\u202fmin, and for any incident involving customer data (or payment failures). The incident commander owns the communication (or the responder if no commander). The notice must contain: the customer\u2011visible impact in their words, start time",
+      "elapsed_ms": 1089,
+      "llm_calls": 1,
+      "error": ""
+    }
+  ]
+}

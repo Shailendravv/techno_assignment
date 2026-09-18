@@ -317,7 +317,7 @@ apart; one number cannot.
 Measured directly at the retrieval stage — no model calls, deterministic, and
 reproducible for free with
 `python -m eval.harness --retrieval-only --compare lexical,hybrid`. Results are
-committed in [`retrieval_comparison.json`](retrieval_comparison.json):
+committed in [`retrieval_comparison.json`](backend/retrieval_comparison.json):
 
 | | lexical | hybrid |
 |---|---|---|
@@ -341,14 +341,65 @@ retrieval makes `no_match` harder, not easier*. The floor is therefore set above
 the highest negative as a guard rail, never fires on these twenty questions, and
 a test pins the overlap so the finding is not quietly forgotten.
 
-**The end-to-end four-outcome scores are not published here, because they have
-not been run** — scoring needs a `GROQ_API_KEY`. The harness is built and tested;
-running it is one command. See [WRITEUP.md](WRITEUP.md) §3.
+### End-to-end scores
+
+Run 2026-09-18, `--arm hybrid`, generation by Groq `openai/gpt-oss-120b`.
+Committed verbatim as [`harness_output.json`](backend/harness_output.json) — the
+file the harness wrote, not a transcription of it.
+
+|  | agent cited something | agent said `no_match` |
+|---|---|---|
+| **a doc applies** (15) | `CORRECT_CITATION` **15** · `PARTIAL` 0 · `WRONG_CITATION` 0 | `MISSED` **0** |
+| **nothing applies** (5) | `FALSE_CITATION` **0** | `CORRECT_NO_MATCH` **5** |
+
+| | |
+|---|---|
+| citation precision / recall | **100% / 100%** |
+| `no_match` precision / recall | **100% / 100%** |
+| overall | **100%** (20/20) |
+| model calls | 16 for 20 questions |
+
+Sixteen calls rather than twenty because the gate stopped four of the five
+unanswerable questions before any model was invoked. A refusal that costs no
+tokens is the cheapest correct answer in the system.
+
+Broken down by what each question was written to probe:
+
+| tag | score |
+|---|---|
+| `given` — the five from the brief | 5/5 |
+| `near-duplicate-trap` | 8/8 |
+| `vocabulary-mismatch` | 2/2 |
+| `general-doc` | 4/4 |
+| `no-match` | 5/5 |
+
+**Deliverable #3 — the brief's five, on their own.** The brief asks specifically
+for the harness's output against its five example questions, so that subset is
+committed separately as
+[`harness_output_given.json`](backend/harness_output_given.json): 5/5
+`CORRECT_CITATION`. One number in it needs reading correctly — `no_match
+precision` shows 0%. That is structural, not a failure: all five brief questions
+are answerable, so the run contains no refusals to score and the denominator is
+zero. The twenty-question run above is where the refusal half is exercised.
+
+Q2 is worth singling out. The agent cited `RB-002` **and** `RB-012`; the brief
+says citing `RB-012` as well is "good, not required", so the scorer counts it
+`CORRECT_CITATION` rather than docking it as noise. That rule is in the frozen
+question set as `acceptable_extra_ids`, written in Phase 1 — not added after
+seeing the output.
+
+**Twenty for twenty is a score to distrust, and the write-up says why.** The
+corpus is self-authored and twenty questions is a small sample; freezing both
+before any retrieval code existed limits the overfitting but cannot rule it out.
+Treat these as provisional — see [WRITEUP.md](WRITEUP.md) §3. The honest claim is
+narrower than the number: on the twenty cases written to break it, including the
+five near-duplicate traps and the five unanswerable questions, nothing got
+through.
 
 ### Gate calibration
 
 `python -m eval.harness --sweep` sweeps the gate floor and shows the trade-off
-directly. Results are in [`eval_sweep.json`](eval_sweep.json):
+directly. Results are in [`eval_sweep.json`](backend/eval_sweep.json):
 
 | floor | gated | `MISSED` | unanswerable admitted |
 |---|---|---|---|
