@@ -49,6 +49,7 @@ from agent.core.retrieve import (
 )
 from agent.nodes.grade import grade_candidates, rewrite_query
 from agent.nodes.ground import ground
+from agent.stages import current_recorder
 from agent.state import AgentState
 from agent.store import get_store
 
@@ -73,22 +74,30 @@ def _query(state: AgentState) -> str:
 
 def analyze_node(state: AgentState) -> dict:
     cfg = _cfg(state)
-    # From the store, not from disk: the service and failure-mode vocabularies
-    # the analyser matches against are derived from whatever corpus is actually
-    # mounted, so adding a runbook teaches it without a code change - whichever
-    # backend that runbook lives in.
-    docs = get_store(cfg).documents()
-    query = _query(state)
-    spec = analyze_query(query, docs)
+    recorder = current_recorder()
 
-    detail = (
-        f"service={spec.service}, failure_mode={spec.failure_mode}, "
-        f"intent={spec.intent}, date={spec.date}"
-    )
-    if spec.unknown_service:
-        detail += f", unknown_service={spec.unknown_service}"
-    if query != state["question"]:
-        detail += f" (on rewritten query {query!r})"
+    with recorder.stage("query_enhance") as ledger:
+        # From the store, not from disk: the service and failure-mode
+        # vocabularies the analyser matches against are derived from whatever
+        # corpus is actually mounted, so adding a runbook teaches it without a
+        # code change - whichever backend that runbook lives in.
+        docs = get_store(cfg).documents()
+        query = _query(state)
+        spec = analyze_query(query, docs)
+
+        detail = (
+            f"service={spec.service}, failure_mode={spec.failure_mode}, "
+            f"intent={spec.intent}, date={spec.date}"
+        )
+        if spec.unknown_service:
+            detail += f", unknown_service={spec.unknown_service}"
+        if query != state["question"]:
+            detail += f" (on rewritten query {query!r})"
+
+        # Named so the log does not overstate it: this is rule-based extraction
+        # over a synonym table, not an LLM rewriting the question. The LLM
+        # enhancement is stage 17, and only on the corrective loop.
+        ledger.detail(f"rule_based; {detail}")
 
     return {"spec": spec, "trace": [f"analyze: {detail}"]}
 
@@ -117,19 +126,30 @@ def retrieve_node(state: AgentState) -> dict:
     retrieval = cfg.retrieval
     spec = state["spec"]
     store = get_store(cfg)
+    recorder = current_recorder()
 
+    # Stages 10 and 12-14 are recorded inside the store, because which of them
+    # run is the store's decision - the SQL backend fuses in one statement.
     ranked, trace = store.retrieve(spec, _query(state), cfg)
     index = store.lexical_index()
 
-    kept = metadata_filter(spec, ranked, retrieval.final_top_k)
+    with recorder.stage("relevance_filter") as ledger:
+        kept = metadata_filter(spec, ranked, retrieval.final_top_k)
 
-    # Which gate depends on whether the dense arm actually contributed, not on
-    # what the profile asked for. A hybrid run that silently fell back to
-    # lexical must be gated as lexical, or it would be held to a floor no
-    # candidate has a score for.
-    dense_ran = any(c.dense_score > 0.0 for c in ranked)
-    gate = passes_hybrid_gate if dense_ran else passes_gate
-    passed, why = gate(spec, kept, index, retrieval)
+        # Which gate depends on whether the dense arm actually contributed, not
+        # on what the profile asked for. A hybrid run that silently fell back to
+        # lexical must be gated as lexical, or it would be held to a floor no
+        # candidate has a score for.
+        dense_ran = any(c.dense_score > 0.0 for c in ranked)
+        gate = passes_hybrid_gate if dense_ran else passes_gate
+        passed, why = gate(spec, kept, index, retrieval)
+
+        ledger.detail(
+            f"kept={[c.doc_id for c in kept]} "
+            f"dropped={len([c for c in ranked if c.verdict == 'dropped'])} "
+            f"gate={'pass' if passed else 'REJECT'} ({why}) "
+            f"via={'hybrid' if dense_ran else 'lexical'}"
+        )
 
     trace.insert(
         0,
@@ -150,11 +170,17 @@ def grade_node(state: AgentState) -> dict:
     """The CRAG relevance filter. Skipped entirely when disabled."""
     cfg = _cfg(state)
     candidates = state["candidates"]
+    recorder = current_recorder()
 
     if not cfg.retrieval.grader_enabled:
+        # The silent skip this whole module was built for. Locally this is every
+        # single run, and nothing in the answer reveals it.
+        recorder.skip("relevance_grade", "GRADER_ENABLED=false in this profile")
         return {"graded": candidates, "trace": ["grade: disabled, candidates passed through"]}
 
-    kept, reason, calls = grade_candidates(state["question"], candidates, cfg=cfg)
+    with recorder.stage("relevance_grade") as ledger:
+        kept, reason, calls = grade_candidates(state["question"], candidates, cfg=cfg)
+        ledger.detail(f"kept={[c.doc_id for c in kept]} llm_calls={calls} - {reason}")
 
     dropped = [c.doc_id for c in candidates if c.doc_id not in {k.doc_id for k in kept}]
     trace = [
@@ -169,7 +195,13 @@ def grade_node(state: AgentState) -> dict:
 def rewrite_node(state: AgentState) -> dict:
     """Restate the question in the corpus's vocabulary and try once more."""
     cfg = _cfg(state)
-    rewritten, calls = rewrite_query(state["question"], cfg=cfg)
+    recorder = current_recorder()
+
+    with recorder.stage("rewrite_query") as ledger:
+        rewritten, calls = rewrite_query(state["question"], cfg=cfg)
+        ledger.detail(
+            f"attempt {state.get('rewrites', 0) + 1}/{cfg.max_rewrites} -> {rewritten!r}"
+        )
 
     return {
         "search_query": rewritten,
@@ -182,13 +214,22 @@ def rewrite_node(state: AgentState) -> dict:
 def ground_node(state: AgentState) -> dict:
     cfg = _cfg(state)
     candidates = state.get("graded") or state["candidates"]
+    recorder = current_recorder()
 
-    answer, cited, invented, calls = ground(
-        state["question"],
-        candidates,
-        role=state.get("model_role", "generator"),
-        cfg=cfg,
-    )
+    # Stages 18 and 19 are recorded inside `ground()` and `llm.chat()`, which
+    # are the only places that know what the prompt contained and whether a
+    # request actually reached Groq.
+    with recorder.stage("generate") as ledger:
+        answer, cited, invented, calls = ground(
+            state["question"],
+            candidates,
+            role=state.get("model_role", "generator"),
+            cfg=cfg,
+        )
+        ledger.detail(
+            f"role={state.get('model_role', 'generator')} cited={cited or []} "
+            f"invented={invented or []} llm_calls={calls}"
+        )
 
     trace = [f"ground: model cited {cited or 'nothing'}"]
     if invented:
@@ -210,7 +251,12 @@ def finalize_node(state: AgentState) -> dict:
     Reached from every branch, so this is the single place the output shape is
     decided - whether we answered or declined, and whichever gate declined.
     """
+    recorder = current_recorder()
+
     if not state.get("gate_passed"):
+        # Everything from grading onward was never entered - and that is the
+        # design, not a bug. Saying so beats five blank `skipped` lines.
+        recorder.skip_remaining("gate rejected; no document was shown to a model")
         return {
             "answer": NO_MATCH_MESSAGE,
             "cited_doc_ids": [],
@@ -219,6 +265,7 @@ def finalize_node(state: AgentState) -> dict:
         }
 
     if "raw_answer" not in state:
+        recorder.skip_remaining("grader found nothing relevant; rewrite budget spent")
         # Finalize was reached without the generator ever running: the grader
         # judged every candidate irrelevant and the rewrite budget was spent.
         # Another no_match that cost no grounding call.
@@ -233,12 +280,17 @@ def finalize_node(state: AgentState) -> dict:
     candidates = state.get("graded") or state.get("candidates") or []
 
     if not cited:
+        recorder.skip_remaining("not reached; the model declined to cite anything")
         return {
             "answer": state.get("raw_answer") or NO_MATCH_MESSAGE,
             "cited_doc_ids": [],
             "confidence": "no_match",
             "trace": ["finalize: no_match (model declined)"],
         }
+
+    # The answered path. Anything still unreported was not needed - most often
+    # the rewrite, which only runs when grading empties the shortlist.
+    recorder.skip_remaining("not reached on the answered path")
 
     confidence = score_confidence(state["spec"], candidates, cited)
     return {

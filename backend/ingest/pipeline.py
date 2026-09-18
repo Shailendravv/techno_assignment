@@ -30,10 +30,11 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 from dataclasses import dataclass, field
 
 from agent.config import Settings, load_settings
-from agent.core.chunk import split_document
+from agent.core.chunk import policy as chunk_policy, split_document
 from agent.core.corpus import load_corpus, parse_doc
 from agent.core.models import Chunk, Doc
 
@@ -94,11 +95,19 @@ def parse_bytes(raw: bytes, filename: str) -> Doc:
     `##` headings the chunker splits on survive - a plain text extractor would
     destroy exactly the structure retrieval depends on.
     """
-    if filename.lower().endswith(".pdf"):
-        text = _pdf_to_markdown(raw)
-        return _doc_from_markdown(text, filename)
+    from agent.stages import current_recorder
 
-    return _doc_from_markdown(raw.decode("utf-8", "replace"), filename)
+    recorder = current_recorder()
+
+    with recorder.stage("extract_text") as ledger:
+        if filename.lower().endswith(".pdf"):
+            text = _pdf_to_markdown(raw)
+            ledger.detail(f"{filename}: pymupdf4llm, layout-aware, {len(text)} chars")
+        else:
+            text = raw.decode("utf-8", "replace")
+            ledger.detail(f"{filename}: markdown read directly, {len(text)} chars")
+
+    return _doc_from_markdown(text, filename)
 
 
 def _pdf_to_markdown(raw: bytes) -> str:
@@ -131,9 +140,18 @@ def _doc_from_markdown(text: str, filename: str) -> Doc:
     """
     import frontmatter
 
-    post = frontmatter.loads(text)
-    meta = post.metadata
-    stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    from agent.stages import current_recorder
+
+    recorder = current_recorder()
+
+    with recorder.stage("clean") as ledger:
+        post = frontmatter.loads(text)
+        meta = post.metadata
+        stem = filename.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        body = (post.content or text).strip()
+        ledger.detail(
+            f"front-matter split, whitespace trimmed: {len(text)} -> {len(body)} chars"
+        )
 
     def optional(key: str) -> str | None:
         value = meta.get(key)
@@ -142,15 +160,27 @@ def _doc_from_markdown(text: str, filename: str) -> Doc:
         cleaned = str(value).strip()
         return None if cleaned in ("", "null", "None", "~") else cleaned
 
-    return Doc(
-        doc_id=str(meta.get("doc_id") or stem).strip(),
-        title=str(meta.get("title") or stem).strip(),
-        service=optional("service"),
-        failure_mode=optional("failure_mode"),
-        doc_type=str(meta.get("doc_type") or "runbook").strip(),
-        date=optional("date"),
-        text=(post.content or text).strip(),
-    )
+    with recorder.stage("extract_metadata") as ledger:
+        doc = Doc(
+            doc_id=str(meta.get("doc_id") or stem).strip(),
+            title=str(meta.get("title") or stem).strip(),
+            service=optional("service"),
+            failure_mode=optional("failure_mode"),
+            doc_type=str(meta.get("doc_type") or "runbook").strip(),
+            date=optional("date"),
+            text=body,
+        )
+        missing = [
+            key for key in ("service", "failure_mode", "date")
+            if getattr(doc, key) is None
+        ]
+        ledger.detail(
+            f"declared in front-matter: doc_id={doc.doc_id} service={doc.service} "
+            f"failure_mode={doc.failure_mode} type={doc.doc_type}"
+            + (f"; absent={missing} (left None, never guessed)" if missing else "")
+        )
+
+    return doc
 
 
 # --------------------------------------------------------------------------
@@ -250,6 +280,9 @@ def ingest_documents(
     force: bool = False,
 ) -> IngestReport:
     """Embed and upsert, skipping anything whose content has not changed."""
+    from agent.stages import current_recorder
+
+    recorder = current_recorder()
     report = IngestReport(dry_run=dry_run)
     report.documents_seen = len(docs)
 
@@ -260,21 +293,43 @@ def ingest_documents(
     # against a free-tier daily quota, and a run that writes nothing has no use
     # for vectors it computed.
     embedder = None
-    if cfg.embedding.enabled and not dry_run:
+    if not cfg.embedding.enabled:
+        recorder.skip("embed_chunks", f"EMBEDDER={cfg.embedding.backend}")
+    elif dry_run:
+        recorder.skip("embed_chunks", "dry run: nothing is written, so nothing is embedded")
+    else:
         from agent.embed import embedding_available, get_embedder
 
         if embedding_available(cfg):
             embedder = get_embedder(cfg)
         else:
+            recorder.degrade(
+                "embed_chunks",
+                f"EMBEDDER={cfg.embedding.backend} is not usable; chunks written "
+                "without vectors and the dense arm will be inert",
+            )
             report.errors.append(
                 f"EMBEDDER={cfg.embedding.backend} is not usable; chunks will be "
                 "written without vectors and the dense arm will be inert."
             )
 
+    if dry_run:
+        recorder.skip("store_embeddings", "dry run: nothing is written")
+
+    # The ledger is one line per stage per run, so the stages inside this loop
+    # are timed and counted here and emitted once, after it. Twelve `chunk`
+    # lines would be a worse log than one that says twelve documents were
+    # chunked - and the per-document detail is already in `IngestReport`.
     total_chunks = 0
+    chunk_ms = 0
+    embed_ms = 0
+    store_ms = 0
     for doc, source in docs:
         digest = content_hash(doc)
+
+        started = time.perf_counter()
         chunks = split_document(doc)
+        chunk_ms += int((time.perf_counter() - started) * 1000)
         total_chunks += len(chunks)
 
         if existing.get(doc.doc_id) == digest:
@@ -283,21 +338,25 @@ def ingest_documents(
 
         vectors = []
         if embedder is not None:
+            started = time.perf_counter()
             try:
                 vectors = embedder.embed_documents([c.text for c in chunks])
                 report.embedded += len(vectors)
             except Exception as exc:  # noqa: BLE001 - one document must not end the run
                 report.errors.append(f"{doc.doc_id}: embedding failed - {exc}")
                 vectors = []
+            embed_ms += int((time.perf_counter() - started) * 1000)
 
         if dry_run:
             report.documents_written += 1
             report.chunks_written += len(chunks)
             continue
 
+        started = time.perf_counter()
         try:
             writer.upsert_document(doc, digest, source)
             writer.replace_chunks(doc.doc_id, chunks, vectors)
+            store_ms += int((time.perf_counter() - started) * 1000)
             report.documents_written += 1
             report.chunks_written += len(chunks)
             if source:
@@ -314,6 +373,37 @@ def ingest_documents(
                     source.get("public_id", doc.doc_id), "failed", error=str(exc)[:500]
                 )
 
+    recorder.ran(
+        "chunk",
+        detail=f"{len(docs)} document(s) -> {total_chunks} chunk(s) [{chunk_policy()}]",
+        ms=chunk_ms,
+    )
+
+    if embedder is not None:
+        recorder.ran(
+            "embed_chunks",
+            detail=f"{report.embedded} vector(s), {cfg.embedding.signature}",
+            ms=embed_ms,
+        )
+
+    if not dry_run:
+        if report.documents_written:
+            recorder.ran(
+                "store_embeddings",
+                detail=(
+                    f"supabase: {report.documents_written} document(s), "
+                    f"{report.chunks_written} chunk(s) upserted, "
+                    f"{report.documents_unchanged} unchanged"
+                ),
+                ms=store_ms,
+            )
+        else:
+            recorder.skip(
+                "store_embeddings",
+                f"nothing to write: all {report.documents_unchanged} document(s) "
+                "unchanged by content hash",
+            )
+
     if not dry_run and report.documents_written:
         writer.bump_version(
             len(docs), total_chunks, cfg.embedding.signature
@@ -329,7 +419,37 @@ def collect_from_repository(cfg: Settings) -> list[tuple[Doc, dict | None]]:
     and it is the path the deployment actually uses, since the corpus is
     checked in.
     """
-    return [(doc, None) for doc in load_corpus(cfg.corpus_dir)]
+    from agent.stages import current_recorder
+
+    recorder = current_recorder()
+
+    # Recorded here rather than inside `agent.core.corpus`, which stays a set of
+    # functions with no opinion about logging. The three stages collapse into
+    # one call on this path because the corpus is already markdown on disk:
+    # there is nothing to extract from a PDF and nothing to clean.
+    with recorder.stage("extract_text") as ledger:
+        corpus = load_corpus(cfg.corpus_dir)
+        ledger.detail(
+            f"{len(corpus)} markdown file(s) read from {cfg.corpus_dir}/ - "
+            "no parser needed, the corpus is checked in"
+        )
+
+    recorder.ran(
+        "clean",
+        detail="front-matter split and body trimmed by the corpus loader",
+    )
+    recorder.ran(
+        "extract_metadata",
+        detail=(
+            "front-matter on every document: "
+            + ", ".join(
+                f"{d.doc_id}(service={d.service or '-'})" for d in corpus[:3]
+            )
+            + (", ..." if len(corpus) > 3 else "")
+        ),
+    )
+
+    return [(doc, None) for doc in corpus]
 
 
 def collect_from_cloudinary(cfg: Settings) -> list[tuple[Doc, dict | None]]:
@@ -384,13 +504,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    docs: list[tuple[Doc, dict | None]] = []
-    if args.seed:
-        docs += collect_from_repository(cfg)
-    if args.from_cloudinary:
-        docs += collect_from_cloudinary(cfg)
+    # The ingest half of the ledger (stages 1-8), scoped here for the same
+    # reason `answer_question` scopes the query half: one run, one ledger.
+    from agent.stages import INGEST, new_recorder, using_recorder
 
-    report = ingest_documents(docs, cfg, dry_run=args.dry_run, force=args.force)
+    with using_recorder(new_recorder(INGEST, cfg=cfg, dry_run=args.dry_run)):
+        docs: list[tuple[Doc, dict | None]] = []
+        if args.seed:
+            docs += collect_from_repository(cfg)
+        if args.from_cloudinary:
+            docs += collect_from_cloudinary(cfg)
+
+        report = ingest_documents(docs, cfg, dry_run=args.dry_run, force=args.force)
 
     print(json.dumps(report.as_dict(), indent=2))
     if args.out:

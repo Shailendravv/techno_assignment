@@ -146,19 +146,33 @@ class SupabaseStore:
     def retrieve(
         self, spec: QuerySpec, query: str, cfg: Settings | None = None
     ) -> tuple[list[Candidate], list[str]]:
+        from agent.stages import current_recorder
+
         cfg = cfg or self.cfg
         retrieval = cfg.retrieval
+        recorder = current_recorder()
         trace: list[str] = []
 
         vector = None
+        if not retrieval.is_hybrid:
+            recorder.skip("embed_query", f"RETRIEVAL_MODE={retrieval.mode}")
+
         if retrieval.is_hybrid:
             from agent.embed import embedding_available, get_embedder
 
             if embedding_available(cfg):
                 try:
-                    vector = get_embedder(cfg).embed_query(query)
-                except Exception:  # noqa: BLE001 - degrade to lexical
+                    with recorder.stage("embed_query") as ledger:
+                        vector = get_embedder(cfg).embed_query(query)
+                        ledger.detail(f"{cfg.embedding.signature} dims={len(vector)}")
+                except Exception as exc:  # noqa: BLE001 - degrade to lexical
+                    recorder.degrade(
+                        "dense_retrieve",
+                        f"query embedding failed ({type(exc).__name__}); lexical-only",
+                    )
                     vector = None
+            else:
+                recorder.skip("embed_query", "no usable embedder")
             if vector is None:
                 trace.append(
                     "retrieve: hybrid requested but no embedder is available - "
@@ -175,7 +189,21 @@ class SupabaseStore:
             "rrf_k": retrieval.rrf_k,
         }
 
-        rows = self.rpc("hybrid_search", params)
+        # One statement does the sparse rank, the dense rank and the fusion, so
+        # all three stages resolve to the same call. Recorded as three lines
+        # anyway: the ledger describes the pipeline, not the SQL, and a reader
+        # comparing this backend against `FileStore` needs the same twelve rows.
+        with recorder.stage("sparse_retrieve") as ledger:
+            rows = self.rpc("hybrid_search", params)
+            ledger.detail(f"hybrid_search rpc, pre-filtered, {len(rows)} rows")
+
+        if vector is not None:
+            recorder.ran("dense_retrieve", detail="fused in-database (pgvector)")
+            recorder.ran("rrf_fuse", detail=f"in-database, k={retrieval.rrf_k}")
+        else:
+            recorder.degrade("dense_retrieve", "no query vector; SQL ran lexical-only")
+            recorder.skip("rrf_fuse", "only one ranked list to fuse")
+
         candidates = [
             Candidate(
                 doc=self._to_doc(row),

@@ -47,6 +47,21 @@ Reply with a JSON object and nothing else:
 """
 
 
+# What `SYSTEM_PROMPT` above actually asks for, and what it does not. Kept
+# beside the prompt so the two cannot drift, and reported on every grounding
+# call - an absent defence is a property of the answer, and one nobody can see
+# by looking at the answer.
+PROMPT_CLAUSES = ("grounding", "refusal", "citation")
+
+# `conflict`: nothing tells the model what to do when two runbooks disagree. It
+#   will pick one, and no trace will say it had to.
+# `injection`: documents are delimited with BEGIN/END markers, but nothing
+#   instructs the model to disregard instructions found inside them. The corpus
+#   is authored by us, so the exposure is the upload path in Phase 7, not the
+#   twelve checked-in files.
+PROMPT_CLAUSES_ABSENT = ("conflict", "injection")
+
+
 def _format_documents(candidates: list[Candidate]) -> str:
     blocks = []
     for candidate in candidates:
@@ -118,12 +133,26 @@ def ground(
     than raising: a model that is unavailable or will not produce JSON should
     cost us an answer, not a crash in a request handler.
     """
+    from agent.stages import current_recorder
+
     cfg = cfg or default_settings
+    recorder = current_recorder()
+
+    with recorder.stage("build_prompt") as ledger:
+        messages = build_messages(question, candidates)
+        # Which defensive clauses this prompt actually carries, and which it
+        # does not. Stated on every run rather than in a comment, because
+        # "conflicts and injection are not covered" is a fact about the answer
+        # that is otherwise only discoverable by reading SYSTEM_PROMPT.
+        ledger.detail(
+            f"docs={[c.doc_id for c in candidates]} "
+            f"chars={sum(len(m['content']) for m in messages)} "
+            f"clauses=[{', '.join(PROMPT_CLAUSES)}] "
+            f"absent=[{', '.join(PROMPT_CLAUSES_ABSENT)}]"
+        )
 
     try:
-        parsed, calls = chat_json(
-            build_messages(question, candidates), role=role, cfg=cfg
-        )
+        parsed, calls = chat_json(messages, role=role, cfg=cfg)
     except LLMUnavailable:
         raise
     except LLMBadJSON:

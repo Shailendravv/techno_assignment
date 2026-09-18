@@ -74,6 +74,15 @@ def answer_question(
     cache = get_cache(cfg)
     hit = cache.get(question)
     if hit is not None:
+        # A cache hit still gets a ledger, all of it skipped for one stated
+        # reason. Otherwise the fastest runs are the ones that log nothing, and
+        # "no stage lines" would mean both "cached" and "logging is broken".
+        from agent.stages import QUERY, new_recorder
+
+        cached_ledger = new_recorder(QUERY, cfg=cfg)
+        cached_ledger.skip_remaining("answer cache: exact hit, pipeline not run")
+        cached_ledger.flush()
+
         result = {
             "answer": hit["answer"],
             "cited_doc_ids": hit["cited_doc_ids"],
@@ -88,7 +97,15 @@ def answer_question(
     state = new_state(question, model_role=model_role)
     state["settings"] = cfg
 
-    final = COMPILED.invoke(state)
+    # The stage ledger is scoped here, around the graph, for the same reason
+    # the cache and the trace exporter are: it is a concern of the entry point.
+    # A node that constructed its own recorder would emit a separate ledger per
+    # rewrite of the corrective loop, and the loop is one run.
+    from agent.stages import QUERY, new_recorder, using_recorder
+
+    recorder = new_recorder(QUERY, cfg=cfg)
+    with using_recorder(recorder):
+        final = COMPILED.invoke(state)
 
     result = {
         "answer": final.get("answer", NO_MATCH_MESSAGE),

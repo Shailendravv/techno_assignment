@@ -44,6 +44,21 @@ _PREAMBLE = "preamble"
 MIN_SECTION_CHARS = 40
 
 
+def policy() -> str:
+    """The splitting rules in one line, for the stage ledger.
+
+    Built from the constants rather than written out, so a log line cannot
+    claim a policy the code stopped following. `no overlap` is stated
+    explicitly because its absence is a deliberate choice and an unstated one
+    reads as an oversight: these are structural boundaries, not a fixed-size
+    window, so there is no span for neighbouring chunks to share.
+    """
+    return (
+        f"'##' sections (not '###'), no overlap, "
+        f"min {MIN_SECTION_CHARS} chars, title+heading prefixed"
+    )
+
+
 def _slug(heading: str) -> str:
     """A stable, readable chunk id fragment: "First checks" -> "first-checks"."""
     slug = re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")

@@ -21,7 +21,7 @@ import json
 import logging
 import os
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
@@ -85,13 +85,28 @@ class Logger:
 
 
 class _BaseFormatter(logging.Formatter):
-    """Common timestamp handling: UTC, always - a log file read hours after a
-    run should not depend on the timezone of the machine that wrote it."""
+    """Common timestamp handling: the machine's own clock, with its offset.
+
+    Local time, because the first thing anyone does with a log line is compare
+    it against something they just did - a request they sent, a command they
+    ran, a clock on the wall. A UTC line forces that comparison through mental
+    arithmetic, and on a machine at +05:30 it silently reads as "this happened
+    five hours ago" to anyone skimming.
+
+    The offset is always written out, which is what makes this safe to change.
+    The original reason for UTC was that a log should not be ambiguous when
+    read on a different machine later - and a timestamp carrying `+05:30` is
+    not ambiguous, it is fully qualified. Nothing is lost.
+
+    On Vercel this needs no special case: those containers run UTC, so
+    `astimezone()` resolves to `+00:00` there and the deployed lines stay UTC
+    by fact rather than by force.
+    """
 
     _SKIP = _LOGRECORD_RESERVED
 
     def formatTime(self, record: logging.LogRecord, datefmt: Optional[str] = None) -> str:
-        ct = datetime.fromtimestamp(record.created, tz=timezone.utc)
+        ct = datetime.fromtimestamp(record.created).astimezone()
         return ct.strftime(datefmt) if datefmt else ct.isoformat()
 
     def _extra_fields(self, record: logging.LogRecord) -> dict:
@@ -108,7 +123,11 @@ class _BaseFormatter(logging.Formatter):
 
 
 class TextFormatter(_BaseFormatter):
-    """`timestamp LEVEL logger: message - {"extra": "fields"}` - what `logs/app.log` holds."""
+    """`timestamp LEVEL logger: message - {"extra": "fields"}` - what `logs/app.log` holds.
+
+    The timestamp is the writing machine's local time with its UTC offset, so
+    it lines up with the clock of whoever is reading the file.
+    """
 
     def format(self, record: logging.LogRecord) -> str:
         base = super().format(record)
@@ -152,13 +171,16 @@ def _build_handler(profile: str) -> logging.Handler:
             handler.setFormatter(
                 TextFormatter(
                     fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S",
+                    datefmt="%Y-%m-%d %H:%M:%S%z",
                 )
             )
             return handler
 
     handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter(datefmt="%Y-%m-%dT%H:%M:%S"))
+    # No `datefmt`, so `formatTime` falls through to `isoformat()` - full ISO
+    # 8601 with the offset, which every log aggregator parses without being
+    # told a pattern.
+    handler.setFormatter(JsonFormatter())
     return handler
 
 

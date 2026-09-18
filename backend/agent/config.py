@@ -303,6 +303,14 @@ class Settings:
     # harness measures the pipeline rather than the cache.
     answer_cache: bool = field(default_factory=lambda: _env_bool("ANSWER_CACHE", False))
 
+    # One log line per pipeline stage, per run - including the stages that were
+    # skipped or never built. See `agent/stages.py`. On by default because the
+    # question it answers ("which half of the pipeline actually ran?") is one
+    # you need answered on the run that already happened. Worth turning off in
+    # a deployed profile if twelve lines a request is more log volume than the
+    # platform's retention is worth.
+    stage_log: bool = field(default_factory=lambda: _env_bool("STAGE_LOG", True))
+
     # Groq free tier returns 429 readily. Retry with exponential backoff.
     llm_max_retries: int = field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
     llm_timeout_s: float = field(default_factory=lambda: _env_float("LLM_TIMEOUT_S", 45.0))

@@ -103,9 +103,12 @@ def chat(
     `role` is "generator" | "reasoner" | "grader" - never a model name. The
     mapping lives in config, so swapping models is never a code change.
     """
+    from agent.stages import current_recorder
+
     cfg = cfg or default_settings
     model = getattr(cfg.models, role)
     client = _get_client(cfg)
+    recorder = current_recorder()
 
     last: Exception | None = None
     for attempt in range(cfg.llm_max_retries):
@@ -139,6 +142,18 @@ def chat(
                 total_tokens=getattr(usage, "total_tokens", 0),
             )
 
+            # The gateway stage records the *first* call of a run, which is the
+            # one that says a request reached Groq at all. Per-call detail is
+            # the `llm_call` line above; this is the ledger's single row.
+            recorder.ran(
+                "llm_gateway",
+                detail=(
+                    f"{model} role={role} attempt={attempt + 1} "
+                    f"tokens={getattr(usage, 'total_tokens', 0)}"
+                ),
+                ms=int((time.perf_counter() - started) * 1000),
+            )
+
             return LLMResult(
                 text=_THINK_BLOCK.sub("", text).strip(),
                 model=model,
@@ -157,6 +172,11 @@ def chat(
                     attempt=attempt + 1,
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                     error=f"{type(exc).__name__}: {exc}",
+                )
+                recorder.degrade(
+                    "llm_gateway",
+                    f"{model} failed after {attempt + 1} attempt(s): "
+                    f"{type(exc).__name__}",
                 )
                 raise
             wait_s = _retry_after(exc, attempt)
